@@ -301,15 +301,18 @@ async def _reply(mid: int, speaker: str, q: dict, delay: float, via_chat=False, 
     t0 = time.perf_counter()
     try:
         text = await brain.answer(mid, speaker, question)
-        t_llm = time.perf_counter()
-        mp3 = None if via_chat or not os.getenv("ELEVENLABS_API_KEY") else await voice.tts(text)
-        t_tts = time.perf_counter()
-    except Exception as e:
+    except Exception as e:  # every model failed: say so instead of going silent
         print(f"[amber] reply failed: {e!r}")
         publish("amber.error", mid, {"question": question, "error": str(e)})
-        if key and pending.get(key) is q:
-            pending.pop(key)
-        return
+        text = brain.SORRY
+    t_llm = time.perf_counter()
+    try:
+        mp3 = None if via_chat or not os.getenv("ELEVENLABS_API_KEY") else await voice.tts(text)
+    except Exception as e:
+        print(f"[amber] tts failed: {e!r}")
+        publish("amber.error", mid, {"question": question, "error": f"tts: {e}"})
+        mp3 = None
+    t_tts = time.perf_counter()
     if key and pending.get(key) is q:
         pending.pop(key)  # committed: later speech no longer rewrites this answer
     bot = _real_bot(mid)

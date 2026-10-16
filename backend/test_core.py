@@ -96,4 +96,12 @@ time.sleep(0.15)
 say(d["bot_id"], "Priya", "actually I mean the cooling tower")
 time.sleep(0.6)
 assert asked[-1] == "Amber, who owns the boiler? actually I mean the cooling tower", asked
+# Every model down -> Amber says sorry instead of going silent.
+async def broken_answer(mid, speaker, question):
+    raise RuntimeError("503 UNAVAILABLE")
+
+brain.answer = broken_answer
+say(d["bot_id"], "Akash", "Amber, what's the status of the VFD drives?")
+assert replies(d["id"])[0][-1] == brain.SORRY
+brain.answer = fake_answer
 print("ok")
