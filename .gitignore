@@ -27,3 +27,4 @@ __pycache__/
 *.db
 backend/logs-*.txt
 backend/assets/fillers/
+backend/tts-compare/
