@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -16,7 +17,9 @@ from pydantic import BaseModel  # noqa: E402
 
 import db  # noqa: E402
 import recall  # noqa: E402
+import brain  # noqa: E402
 import seed  # noqa: E402
+import voice  # noqa: E402
 
 app = FastAPI(title="Amber Live")
 seed.seed()  # creates tables + mock records; idempotent
@@ -166,8 +169,12 @@ def handle_event(mid: int, event: str, data: dict):
     inner = data.get("data") or {}
     who = (inner.get("participant") or {}).get("name") or "Unknown"
     ts = (inner.get("timestamp") or {}).get("absolute") or db.now()
+    if who == "Amber" and event in ("transcript.data", "transcript.partial_data", "participant_events.chat_message"):
+        return  # our own voice / chat echoed back
 
-    if event == "transcript.data":
+    if event == "transcript.partial_data":
+        yield_floor(mid)
+    elif event == "transcript.data":
         words = inner.get("words") or []
         text = " ".join(w["text"] for w in words).strip()
         if not text:
@@ -177,6 +184,8 @@ def handle_event(mid: int, event: str, data: dict):
         db.execute("INSERT INTO utterances (meeting_id,speaker,text,ts,addressed) VALUES (?,?,?,?,?)",
                    mid, who, text, start, int(addressed))
         publish("transcript", mid, {"speaker": who, "text": text, "ts": start, "addressed": addressed})
+        yield_floor(mid)
+        on_speech(mid, who, text, addressed)
     elif event == "participant_events.join":
         db.execute("INSERT INTO participants (meeting_id,name,joined_at) VALUES (?,?,?)", mid, who, ts)
         publish("participant.join", mid, {"name": who, "at": ts})
@@ -188,6 +197,94 @@ def handle_event(mid: int, event: str, data: dict):
         text = (inner.get("data") or {}).get("text", "")
         db.execute("INSERT INTO chat (meeting_id,sender,text,ts,is_amber) VALUES (?,?,?,?,0)", mid, who, text, ts)
         publish("chat", mid, {"sender": who, "text": text, "at": ts, "addressed": is_addressed(text)})
+        if is_addressed(text) and not CANCEL.search(text):
+            _spawn(_reply(mid, who, {"parts": [text]}, delay=0, via_chat=True))
     elif event.startswith("bot."):
         # Status webhooks (configured in the Recall dashboard): bot.joining_call, bot.in_call_recording, bot.done ...
         _set_status(mid, event.removeprefix("bot."))
+
+
+# --- live answering ----------------------------------------------------------
+# Amber speaks only when addressed. The asker's question is buffered until they stop
+# talking for DEBOUNCE seconds; if they keep talking (rephrasing, changing their mind)
+# the pending answer is cancelled and rebuilt from everything they said.
+DEBOUNCE = float(os.getenv("AMBER_DEBOUNCE", "1.0"))
+CANCEL = re.compile(r"\b(never ?mind|forget it|cancel that|scratch that|no worries)\b", re.I)
+pending: dict[tuple[int, str], dict] = {}  # (meeting, speaker) -> {"parts": [...], "task": Task}
+speaking_until: dict[int, float] = {}       # meeting -> monotonic time Amber's audio ends
+_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    t = asyncio.create_task(coro)
+    _tasks.add(t)  # keep a reference so the task isn't garbage-collected mid-flight
+    t.add_done_callback(_tasks.discard)
+    return t
+
+
+def on_speech(mid: int, speaker: str, text: str, addressed: bool):
+    key = (mid, speaker)
+    q = pending.get(key)
+    if CANCEL.search(text):
+        if q:
+            q["task"].cancel()
+            pending.pop(key)
+            publish("amber.cancelled", mid, {"speaker": speaker})
+        return
+    if not (addressed or q):
+        return
+    if q:
+        q["task"].cancel()  # asker is still talking -> restart with the fuller question
+    q = q or {"parts": []}
+    q["parts"].append(text)
+    q["task"] = _spawn(_reply(mid, speaker, q, delay=DEBOUNCE, key=key))
+    pending[key] = q
+
+
+def _real_bot(mid: int) -> str | None:
+    bot = (db.row("SELECT bot_id FROM meetings WHERE id=?", mid) or {}).get("bot_id")
+    return bot if recall.enabled() and bot and not bot.startswith("replay-") else None
+
+
+def yield_floor(mid: int):
+    """A human started talking while Amber's audio is playing -> stop it."""
+    if time.monotonic() < speaking_until.get(mid, 0):
+        speaking_until[mid] = 0
+        if bot := _real_bot(mid):
+            _spawn(recall.stop_audio(bot))
+        publish("amber.yielded", mid, {})
+
+
+async def _reply(mid: int, speaker: str, q: dict, delay: float, via_chat=False, key=None):
+    await asyncio.sleep(delay)
+    question = " ".join(q["parts"])
+    t0 = time.perf_counter()
+    try:
+        text = await brain.answer(mid, speaker, question)
+        t_llm = time.perf_counter()
+        mp3 = None if via_chat or not os.getenv("ELEVENLABS_API_KEY") else await voice.tts(text)
+        t_tts = time.perf_counter()
+    except Exception as e:
+        print(f"[amber] reply failed: {e!r}")
+        publish("amber.error", mid, {"question": question, "error": str(e)})
+        if key and pending.get(key) is q:
+            pending.pop(key)
+        return
+    if key and pending.get(key) is q:
+        pending.pop(key)  # committed: later speech no longer rewrites this answer
+    bot = _real_bot(mid)
+    if via_chat:
+        db.execute("INSERT INTO chat (meeting_id,sender,text,ts,is_amber) VALUES (?,?,?,?,1)", mid, "Amber", text, db.now())
+        if bot:
+            await recall.send_chat(bot, text)
+    else:
+        db.execute("INSERT INTO utterances (meeting_id,speaker,text,ts,addressed) VALUES (?,?,?,?,0)",
+                   mid, "Amber", text, None)
+        if bot and mp3:
+            await recall.output_audio(bot, mp3)
+        if mp3:
+            speaking_until[mid] = time.monotonic() + len(mp3) / 16000  # 128 kbps = 16 KB/s
+    latency = {"llm": round(t_llm - t0, 2), "tts": round(t_tts - t_llm, 2), "total": round(time.perf_counter() - t0, 2)}
+    print(f"[amber] {speaker}: {question!r} -> {text!r} {latency}")
+    publish("amber.reply", mid, {"to": speaker, "question": question, "text": text,
+                                 "via": "chat" if via_chat else "voice", "latency": latency})

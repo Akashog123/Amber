@@ -7,6 +7,7 @@ import httpx
 
 EVENTS = [
     "transcript.data",
+    "transcript.partial_data",  # only used to notice someone talking over Amber
     "participant_events.join",
     "participant_events.leave",
     "participant_events.chat_message",
@@ -56,6 +57,11 @@ async def output_audio(bot_id: str, mp3: bytes):
         r = await c.post(f"/bot/{bot_id}/output_audio/",
                          json={"kind": "mp3", "b64_data": base64.b64encode(mp3).decode()})
         r.raise_for_status()
+
+
+async def stop_audio(bot_id: str):
+    async with _client() as c:
+        (await c.delete(f"/bot/{bot_id}/output_audio/")).raise_for_status()
 
 
 async def send_chat(bot_id: str, text: str):

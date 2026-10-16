@@ -2,4 +2,10 @@
 name = "amber-backend"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["fastapi", "uvicorn", "httpx", "python-dotenv"]
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "httpx",
+    "python-dotenv",
+    "google-genai>=2.31.0",
+]
