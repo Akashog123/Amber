@@ -20,6 +20,7 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").rstrip("/")  # include the /v1, e.g
 LLM_MODEL = os.getenv("LLM_MODEL", "")
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "10"))
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "300"))  # headroom for models that reason before answering
+LLM_REASONING_EFFORT = os.getenv("LLM_REASONING_EFFORT", "")  # none / low / medium / high; empty = model default
 
 ANSWER_RULES = f"""You are Amber, an AI meeting assistant built by this team for this meeting (not made by Google or any
 AI company). You take part in the live call, answer questions from the meeting context and records, and keep notes.
@@ -67,7 +68,8 @@ async def chat_completion(system: str, prompt: str) -> str:
         f"{LLM_BASE_URL}/chat/completions",
         headers={"Authorization": f"Bearer {os.getenv('LLM_API_KEY', '')}"},
         json={"model": LLM_MODEL, "temperature": 0.2, "max_tokens": LLM_MAX_TOKENS,
-              "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}]},
+              "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+              **({"reasoning_effort": LLM_REASONING_EFFORT} if LLM_REASONING_EFFORT else {})},
     )
     r.raise_for_status()
     choice = r.json()["choices"][0]
