@@ -1,7 +1,9 @@
-"""LLM reasoning (Gemini). Grounded answers now; extraction / tagging / MOM come next."""
+"""LLM reasoning. Any OpenAI-compatible server (LLM_BASE_URL, e.g. a local proxy) and/or Gemini.
+Grounded answers now; extraction / tagging / MOM come next."""
 import asyncio
 import os
 
+import httpx
 from google import genai
 from google.genai import types
 
@@ -12,6 +14,12 @@ SORRY = "Sorry, I couldn't get that. Could you ask again?"
 # 2.5 models 404 for new keys. On 503 (overloaded), 429 or a timeout, fall through to the next model.
 MODELS = [os.getenv("GEMINI_MODEL", "gemini-3.5-flash"), "gemini-3.8-flash", "gemini-flash-latest"]
 CALL_TIMEOUT = float(os.getenv("GEMINI_TIMEOUT", "5"))  # an overloaded call otherwise hangs for minutes
+
+# OpenAI-compatible endpoint (local proxy, OpenAI, Groq, LM Studio...). Used first when LLM_BASE_URL is set.
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").rstrip("/")  # include the /v1, e.g. http://localhost:8317/v1
+LLM_MODEL = os.getenv("LLM_MODEL", "")
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "10"))
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "300"))  # headroom for models that reason before answering
 
 ANSWER_RULES = f"""You are Amber, an AI meeting assistant built by this team for this meeting (not made by Google or any
 AI company). You take part in the live call, answer questions from the meeting context and records, and keep notes.
@@ -24,6 +32,7 @@ General knowledge or concept questions may be answered from your own knowledge.
 Never invent record IDs, dates, amounts or owners."""
 
 _client: genai.Client | None = None
+_http: httpx.AsyncClient | None = None
 
 
 def client() -> genai.Client:
@@ -51,20 +60,54 @@ def build_context(mid: int, transcript_lines: int = 40) -> str:
             + "\n\nTRANSCRIPT (most recent last):\n" + "\n".join(f"{u['speaker']}: {u['text']}" for u in lines))
 
 
-async def answer(mid: int, speaker: str, question: str) -> str:
-    prompt = f"{build_context(mid)}\n\n{speaker} asked Amber: {question}"
+async def chat_completion(system: str, prompt: str) -> str:
+    global _http
+    _http = _http or httpx.AsyncClient(timeout=LLM_TIMEOUT)  # kept alive: no TLS/TCP setup per reply
+    r = await _http.post(
+        f"{LLM_BASE_URL}/chat/completions",
+        headers={"Authorization": f"Bearer {os.getenv('LLM_API_KEY', '')}"},
+        json={"model": LLM_MODEL, "temperature": 0.2, "max_tokens": LLM_MAX_TOKENS,
+              "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}]},
+    )
+    r.raise_for_status()
+    choice = r.json()["choices"][0]
+    if choice.get("finish_reason") == "length":
+        raise RuntimeError(f"{LLM_MODEL} hit the token cap, reply would be cut off")
+    return (choice["message"].get("content") or "").strip()
+
+
+async def gemini(model: str, system: str, prompt: str) -> str:
     cfg = types.GenerateContentConfig(
-        system_instruction=ANSWER_RULES, max_output_tokens=120, temperature=0.2,
+        system_instruction=system, max_output_tokens=120, temperature=0.2,
         thinking_config=types.ThinkingConfig(thinking_budget=0))  # thinking adds seconds of latency
-    err = None
-    for model in MODELS:
+    r = await asyncio.wait_for(
+        client().aio.models.generate_content(model=model, contents=prompt, config=cfg), CALL_TIMEOUT)
+    if r.candidates and r.candidates[0].finish_reason == types.FinishReason.MAX_TOKENS:
+        raise RuntimeError(f"{model} hit the token cap, reply would be cut off")
+    return (r.text or "").strip()
+
+
+def providers() -> list[tuple[str, callable]]:
+    """Ordered fallbacks: the OpenAI-compatible endpoint first, then Gemini models."""
+    out = []
+    if LLM_BASE_URL:
+        out.append((f"openai:{LLM_MODEL}", chat_completion))
+    if os.getenv("GEMINI_API_KEY"):
+        out += [(f"gemini:{m}", lambda s, p, m=m: gemini(m, s, p)) for m in MODELS]
+    return out
+
+
+async def complete(system: str, prompt: str) -> str:
+    err: Exception = RuntimeError("no LLM configured: set LLM_BASE_URL or GEMINI_API_KEY")
+    for name, call in providers():
         try:
-            r = await asyncio.wait_for(
-                client().aio.models.generate_content(model=model, contents=prompt, config=cfg), CALL_TIMEOUT)
-            if r.candidates and r.candidates[0].finish_reason == types.FinishReason.MAX_TOKENS:
-                raise RuntimeError(f"{model} hit the token cap, reply would be cut off")
-            return (r.text or "").strip() or FALLBACK
-        except Exception as e:  # 429 / 503 overload / timeout / truncation -> try the next model
-            print(f"[brain] {model} failed: {type(e).__name__} {str(e)[:80]}")
+            return await call(system, prompt)
+        except Exception as e:  # 429 / 503 overload / timeout / truncation -> try the next one
+            print(f"[brain] {name} failed: {type(e).__name__} {str(e)[:80]}")
             err = e
     raise err
+
+
+async def answer(mid: int, speaker: str, question: str) -> str:
+    prompt = f"{build_context(mid)}\n\n{speaker} asked Amber: {question}"
+    return await complete(ANSWER_RULES, prompt) or FALLBACK
