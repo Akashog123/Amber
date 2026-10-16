@@ -29,6 +29,8 @@ Reply in 1-2 short spoken sentences, under 35 words. No markdown, no lists, no p
 For facts about this company, its records, orders, equipment, people, tasks, numbers or decisions,
 use ONLY the CONTEXT, RECORDS, OPEN TASKS and TRANSCRIPT below. If that information is not there,
 reply exactly: "{FALLBACK}"
+What people said in this meeting (TRANSCRIPT) is information you have: use it for questions like
+"what did I just say" or "what have we discussed".
 General knowledge or concept questions may be answered from your own knowledge.
 Never invent record IDs, dates, amounts or owners."""
 
