@@ -246,7 +246,7 @@ sent.clear()
 asyncio.run(main.send_due_reminders())
 (to, subject, html, text), = sent
 assert to == ["rahul@example.com"] and subject == "Reminder: Send vendor quote (due 2026-10-23)", subject
-assert "Hi Rahul" in text and "quote sent" in text
+assert "Hi Rahul" in text and "You said: \"I'll send it by Friday\"" in text and "Latest update: quote sent" in text
 asyncio.run(main.send_due_reminders())
 assert len(sent) == 1
 main.DEMO_REMINDER_MIN = ""

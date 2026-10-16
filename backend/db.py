@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS outbox (
 );
 CREATE TABLE IF NOT EXISTS tasks (
   id INTEGER PRIMARY KEY, meeting_id INTEGER, series_id TEXT, title TEXT, owner TEXT,
-  owner_email TEXT, due_at TEXT, status TEXT, last_update TEXT, reminded_at TEXT
+  owner_email TEXT, due_at TEXT, status TEXT, last_update TEXT, reminded_at TEXT, quote TEXT
 );
 """
 
@@ -63,6 +63,9 @@ def db():
 def init():
     with db() as c:
         c.executescript(SCHEMA)
+        # ponytail: hand-rolled migration for DBs created before tasks.quote; use a migration tool past a few
+        if "quote" not in {r[1] for r in c.execute("PRAGMA table_info(tasks)")}:
+            c.execute("ALTER TABLE tasks ADD COLUMN quote TEXT")
 
 
 def rows(sql: str, *args) -> list[dict]:

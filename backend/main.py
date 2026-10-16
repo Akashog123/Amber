@@ -477,7 +477,7 @@ async def apply_extraction(mid: int, r: dict):
         if not t.get("title") or key in open_keys:
             continue
         open_keys.add(key)  # also dedupes repeats within this same pass
-        tid = db.execute("INSERT INTO tasks (meeting_id,series_id,title,owner,owner_email,due_at,status,last_update) "
+        tid = db.execute("INSERT INTO tasks (meeting_id,series_id,title,owner,owner_email,due_at,status,quote) "
                          "VALUES (?,?,?,?,?,?,'open',?)", mid, series, t["title"], t.get("owner"),
                          _attendee_email(mid, t.get("owner")), t.get("due"), t.get("quote"))
         publish("task.created", mid, {"id": tid, **t})
