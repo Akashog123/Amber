@@ -246,7 +246,7 @@ sent.clear()
 asyncio.run(main.send_due_reminders())
 (to, subject, html, text), = sent
 assert to == ["rahul@example.com"] and subject == "Reminder: Send vendor quote (due 2026-10-23)", subject
-assert "Hi Rahul" in text and "You said: \"I'll send it by Friday\"" in text and "Latest update: quote sent" in text
+assert "Hi Rahul" in text and "From the meeting: \"I'll send it by Friday\"" in text and "Latest update: quote sent" in text
 asyncio.run(main.send_due_reminders())
 assert len(sent) == 1
 main.DEMO_REMINDER_MIN = ""
@@ -261,6 +261,18 @@ db.execute("UPDATE tasks SET due_at='2000-01-01' WHERE id=?", tid2)
 asyncio.run(main.send_due_reminders())
 assert db.row("SELECT reminded_at FROM tasks WHERE id=?", tid2)["reminded_at"].startswith("failed:")
 assert c.get(f"/api/outbox?meeting_id={E}").json()[0]["status"] == "failed"
+
+# Pre-meeting document: its text lands in Amber's context; unsupported files are refused.
+import base64  # noqa: E402
+doc = base64.b64encode(b"Vendor for PO-1042 seals is FlowServe India, contact Mr. Rao.").decode()
+dm = c.post("/api/meetings/dispatch", json={"title": "doc", "url": "https://meet.google.com/z", "replay": True,
+                                            "context": "Quarterly review", "document_name": "brief.txt",
+                                            "document_b64": doc}).json()
+ctx = db.row("SELECT context_text FROM meetings WHERE id=?", dm["id"])["context_text"]
+assert ctx.startswith("Quarterly review") and "DOCUMENT (brief.txt):\nVendor for PO-1042" in ctx, ctx
+assert c.post("/api/meetings/dispatch", json={"title": "d", "url": "https://meet.google.com/z", "replay": True,
+                                              "document_name": "old.doc", "document_b64": doc}).status_code == 400
+assert c.get("/api/outbox/999999").status_code == 404
 
 # Every model down -> Amber says sorry instead of going silent.
 async def broken_answer(mid, speaker, question):

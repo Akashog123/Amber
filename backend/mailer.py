@@ -100,8 +100,8 @@ def reminder(t: dict, meeting_title: str) -> tuple[str, str, str]:
     first = (t["owner"] or "there").split(" ")[0]
     due = t["due_at"] or "soon"
     subject = f"Reminder: {t['title']} (due {due})"
-    # "You said" is the owner's own words from the meeting; later progress notes are shown separately.
-    quote = (f"<p style='color:#555;margin:4px 0'>You said: <i>“{escape(t['quote'])}”</i></p>" if t.get("quote") else "")
+    # The words that created the task (the owner's or whoever assigned it); progress notes shown separately.
+    quote = (f"<p style='color:#555;margin:4px 0'>From the meeting: <i>“{escape(t['quote'])}”</i></p>" if t.get("quote") else "")
     if t.get("last_update"):
         quote += f"<p style='color:#555;margin:4px 0'>Latest update: {escape(t['last_update'])}</p>"
     html = f"""<div style="font-family:Segoe UI,Arial,sans-serif;max-width:600px;color:#222">
@@ -111,7 +111,7 @@ def reminder(t: dict, meeting_title: str) -> tuple[str, str, str]:
 <p>How is it going? If it's done or blocked, just reply to this email or mention it in the next meeting.</p>
 <p>Amber</p></div>"""
     text = (f"Hi {first},\n\nA quick check-in from Amber on what you picked up in {meeting_title}:\n\n"
-            f"{t['title']}\nDue: {due}\n" + (f'You said: "{t["quote"]}"\n' if t.get("quote") else "")
+            f"{t['title']}\nDue: {due}\n" + (f'From the meeting: "{t["quote"]}"\n' if t.get("quote") else "")
             + (f"Latest update: {t['last_update']}\n" if t.get("last_update") else "")
             + "\nHow is it going? If it's done or blocked, reply to this email or mention it in the next meeting.\n\nAmber")
     return subject, html, text

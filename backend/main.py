@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 import db  # noqa: E402
+import documents  # noqa: E402
 import recall  # noqa: E402
 import brain  # noqa: E402
 import mailer  # noqa: E402
@@ -111,6 +112,8 @@ class Dispatch(BaseModel):
     attendees: list[Attendee] = []
     series_id: str | None = None
     replay: bool = False  # skip Recall; events come from replay.py
+    document_name: str = ""
+    document_b64: str = ""  # PDF / DOCX / TXT, base64; its text becomes part of Amber's context
 
 
 @app.post("/api/meetings/dispatch")
@@ -118,10 +121,17 @@ async def dispatch(body: Dispatch):
     platform = detect_platform(body.url)
     if not platform:
         raise HTTPException(400, "Unsupported meeting URL (Google Meet, Zoom or Teams https link).")
+    context = body.context
+    if body.document_b64:
+        try:
+            text = documents.extract_text(body.document_name, body.document_b64)
+            context += f"\n\nDOCUMENT ({body.document_name}):\n{text}"
+        except Exception as e:
+            raise HTTPException(400, f"Could not read the document: {e}")
     mid = db.execute(
         "INSERT INTO meetings (series_id,title,url,platform,agenda,context_text,status,created_at) "
         "VALUES (?,?,?,?,?,?,?,?)",
-        body.series_id, body.title, body.url, platform, body.agenda, body.context, "queued", db.now())
+        body.series_id, body.title, body.url, platform, body.agenda, context.strip(), "queued", db.now())
     with db.db() as c:
         c.executemany("INSERT INTO attendees VALUES (?,?,?)", [(mid, a.name, a.email) for a in body.attendees])
     if recall.enabled() and not body.replay:
@@ -662,6 +672,11 @@ async def resend_recap(mid: int):
     db.row("SELECT id FROM meetings WHERE id=?", mid) or _404()
     await post_meeting(mid, force=True)
     return db.meeting_detail(mid)
+
+
+@app.get("/api/outbox/{oid}")
+async def outbox_item(oid: int):
+    return db.row("SELECT * FROM outbox WHERE id=?", oid) or _404()
 
 
 @app.get("/api/outbox")

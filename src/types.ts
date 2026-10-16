@@ -74,6 +74,11 @@ export type ScheduledMeet = {
     chat?: { sender: string; time: string; message: string; isAmber?: boolean }[]
     tasks?: { title: string; assignee: string; status: "Completed" | "In progress" | "Started" | "Ongoing" }[]
     recordingUrl?: string
+    // From the backend MOM
+    decisions?: string[]
+    openQuestions?: string[]
+    agenda?: { item: string; status: string; notes: string }[]
+    recordUpdates?: string[]
   }
 }
 
@@ -135,6 +140,6 @@ export const MAX_DOCUMENT_SIZE = 10 * 1024 * 1024
 
 export const formatFileSize = (bytes?: number) => {
   if (!bytes) return ""
-  if (bytes < 1024 * 1024) return ${Math.max(1, Math.round(bytes / 1024))} KB
-  return ${(bytes / (1024 * 1024)).toFixed(1)} MB
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }

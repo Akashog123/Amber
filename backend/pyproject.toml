@@ -8,4 +8,5 @@ dependencies = [
     "httpx",
     "python-dotenv",
     "google-genai>=2.31.0",
+    "pypdf>=6.21.0",
 ]

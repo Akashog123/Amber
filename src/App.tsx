@@ -1,5 +1,19 @@
 import { useEffect, useRef, useState } from "react"
 import {
+  api,
+  apiDateKey,
+  isLive,
+  statusLabel,
+  toBase64,
+  toReviewMeet,
+  toScheduledMeet,
+  useAmberEvents,
+  type ApiMeeting,
+} from "./api"
+import LiveMeeting from "./components/LiveMeeting"
+import { OutboxPage, RecordsPage } from "./components/DataPages"
+import type { ScheduledMeet } from "./types"
+import {
   ArrowLeft,
   ArrowRight,
   BriefcaseBusiness,
@@ -72,45 +86,6 @@ const calendarDays = (month: Date) => {
   const first = new Date(month.getFullYear(), month.getMonth(), 1)
   const start = addDays(first, -first.getDay())
   return Array.from({ length: 42 }, (_, index) => addDays(start, index))
-}
-
-type ScheduledMeet = {
-  id?: string
-  title: string
-  time: string
-  duration: string
-  type: string
-  status?: "upcoming" | "ended"
-  workspaceId?: string
-  categoryId?: string
-  link?: string
-  context?: string
-  fileName?: string
-  fileId?: string
-  fileSize?: number
-  fileType?: string
-  review?: {
-    summary?: string
-    takeaways?: string[]
-    decision?: string
-    participants?: {
-      name: string
-      joined: string
-      left: string
-    }[]
-    chat?: {
-      sender: string
-      time: string
-      message: string
-      isAmber?: boolean
-    }[]
-    tasks?: {
-      title: string
-      assignee: string
-      status: "Completed" | "In progress" | "Started" | "Ongoing"
-    }[]
-    recordingUrl?: string
-  }
 }
 
 type ScheduleDraft = {
@@ -2896,23 +2871,37 @@ function JoinMeetPanel({
   )
 }
 
+// "Name, email" per line (email optional) -> attendees for the recap and reminders.
+const parseAttendees = (text: string) =>
+  text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const email = line.match(/[^\s<>,;]+@[^\s<>,;]+/)?.[0] ?? ""
+      const name = line.replace(email, "").replace(/[<>,;]/g, " ").trim() || email.split("@")[0]
+      return { name, email }
+    })
+
 function QuickJoinCard({
   workspace,
   category,
-  onStore,
+  onDispatched,
 }: {
   workspace?: Workspace
   category?: {
     id: string
     name: string
+    agenda?: string
   }
-  onStore: (
-    meeting: Omit<StoredMeeting, "id" | "createdAt" | "workspaceId" | "categoryId">,
-  ) => void
+  onDispatched: (meetingId: number) => void
 }) {
   const fileInput = useRef<HTMLInputElement>(null)
   const [meetName, setMeetName] = useState("")
   const [meetLink, setMeetLink] = useState("")
+  const [attendees, setAttendees] = useState("")
+  const [file, setFile] = useState<File>()
+  const [sending, setSending] = useState(false)
   const [context, setContext] = useState("")
   const [fileName, setFileName] = useState("")
   const [fileId, setFileId] = useState<string>()
@@ -2935,6 +2924,7 @@ function QuickJoinCard({
     }
     try {
       const id = await storeDocument(file)
+      setFile(file)
       setFileName(file.name)
       setFileId(id)
       setFileSize(file.size)
@@ -2945,28 +2935,36 @@ function QuickJoinCard({
     }
   }
 
-  const join = () => {
+  // Amber joins the call; the operator never does.
+  const join = async () => {
     if (!workspace || !category) {
-      setMessage("Select a workspace and meet type before joining.")
+      setMessage("Select a workspace and meet type before sending Amber.")
       return
     }
     if (!meetName.trim() || !meetLink.trim()) {
       setMessage("Add the meet name and meeting link.")
       return
     }
-    onStore({
-      name: meetName.trim(),
-      link: meetLink.trim(),
-      agenda: context,
-      fileName,
-      fileId,
-      fileSize,
-      fileType,
-    })
-    setMessage(
-      `Saved to ${workspace.name} / ${category.name}. Opening your meeting…`,
-    )
-    window.open(meetLink.trim(), "_blank", "noopener,noreferrer")
+    setSending(true)
+    setMessage("")
+    try {
+      const doc = fileName && file ? { document_name: file.name, document_b64: await toBase64(file) } : {}
+      const result = await api.dispatch({
+        title: meetName.trim(),
+        url: meetLink.trim(),
+        agenda: context.trim(),
+        context: category.agenda?.trim() ?? "",
+        attendees: parseAttendees(attendees),
+        series_id: `${workspace.id}:${category.id}`, // same meet type = same series, so Amber remembers past meetings
+        ...doc,
+      })
+      setMessage(`Sent. Amber is ${result.status === "replay" ? "ready for a replay" : "joining the call"}…`)
+      onDispatched(result.id)
+    } catch (e) {
+      setMessage((e as Error).message)
+    } finally {
+      setSending(false)
+    }
   }
 
   return (
@@ -3046,6 +3044,21 @@ function QuickJoinCard({
             />
           </label>
         </div>
+
+        <label className="mt-4 block">
+          <span className="mb-2 block text-sm font-bold text-[#34415d]">
+            Attendees{" "}
+            <span className="font-normal text-[#8792a8]">
+              (one per line: Name, email — they get the recap and task reminders)
+            </span>
+          </span>
+          <textarea
+            className="h-24 w-full resize-y rounded-xl border border-[#cbd6e6] px-4 py-3 outline-none placeholder:text-[#8792a8] focus:border-[#3479f5] focus:ring-4 focus:ring-[#3479f5]/10"
+            value={attendees}
+            onChange={(event) => setAttendees(event.target.value)}
+            placeholder={"Rahul Mehta, rahul@company.com\nPriya, priya@company.com"}
+          />
+        </label>
 
         <div className="mt-5 rounded-2xl border border-[#d7dfeb] p-4">
           <div className="flex items-center justify-between gap-3">
@@ -3186,7 +3199,7 @@ function QuickJoinCard({
         <div className="mt-4 flex flex-col-reverse items-start justify-between gap-3 sm:flex-row sm:items-center">
           <p
             className={`text-sm font-semibold ${
-              message.startsWith("Saved") ? "text-[#27815a]" : "text-[#c94848]"
+              message.startsWith("Sent") ? "text-[#27815a]" : "text-[#c94848]"
             }`}
             role="status"
           >
@@ -3195,10 +3208,10 @@ function QuickJoinCard({
           <button
             className="flex w-full items-center justify-center gap-2 rounded-full bg-[#3479f5] px-7 py-3 font-bold text-white hover:bg-[#2068e7] disabled:cursor-not-allowed disabled:opacity-45 sm:w-auto"
             type="button"
-            onClick={join}
-            disabled={!canJoin}
+            onClick={() => void join()}
+            disabled={!canJoin || sending}
           >
-            <Video className="h-5 w-5" /> Join Amber
+            <Video className="h-5 w-5" /> {sending ? "Sending…" : "Send Amber"}
           </button>
         </div>
       </div>
@@ -3469,6 +3482,49 @@ function MeetingDetail({
                       {meeting.review.decision}
                     </p>
                   </div>
+                )}
+                {(meeting.review?.agenda?.length ?? 0) > 0 && (
+                  <div className="mt-6">
+                    <h4 className="text-sm font-extrabold text-[#34415d]">Agenda alignment</h4>
+                    <ul className="mt-3 space-y-2">
+                      {meeting.review?.agenda?.map((a) => (
+                        <li key={a.item} className="rounded-xl border border-[#e5eaf1] p-3 text-sm">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-bold text-[#273653]">{a.item}</span>
+                            <span
+                              className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                                a.status === "covered"
+                                  ? "bg-[#e5f5ed] text-[#27815a]"
+                                  : a.status === "not covered"
+                                    ? "bg-[#fff1f1] text-[#c04d4d]"
+                                    : "bg-[#fff4db] text-[#ad7300]"
+                              }`}
+                            >
+                              {a.status}
+                            </span>
+                          </div>
+                          {a.notes && <p className="mt-1.5 leading-5 text-[#526079]">{a.notes}</p>}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(
+                  [
+                    ["Decisions", meeting.review?.decisions, "bg-[#f3f7ff] border-[#d7e4f8]"],
+                    ["Open questions", meeting.review?.openQuestions, "bg-[#fffaf0] border-[#f3e2bd]"],
+                    ["Record updates", meeting.review?.recordUpdates, "bg-[#f2faf5] border-[#cfe9db]"],
+                  ] as const
+                ).map(
+                  ([title, items, tone]) =>
+                    (items?.length ?? 0) > 0 && (
+                      <div key={title} className={`mt-6 rounded-2xl border p-4 ${tone}`}>
+                        <p className="text-xs font-bold uppercase tracking-[0.1em] text-[#6680b4]">{title}</p>
+                        <ul className="mt-2 list-disc space-y-1.5 pl-5 text-sm leading-6 text-[#273653]">
+                          {items?.map((item) => <li key={item}>{item}</li>)}
+                        </ul>
+                      </div>
+                    ),
                 )}
               </div>
             )}
@@ -3944,7 +4000,50 @@ function Dashboard() {
       }
     }
   })
-  const selectedMeetings = meetingsByDate[dateKey(selectedDate)] ?? []
+  // Backend meetings (dispatched Amber sessions) merged into the calendar's date-keyed map.
+  const [apiMeetings, setApiMeetings] = useState<ApiMeeting[]>([])
+  const [view, setView] = useState<"meetings" | "records" | "outbox">("meetings")
+  const [liveMeetingId, setLiveMeetingId] = useState<number | null>(null)
+  const [backendError, setBackendError] = useState("")
+  const loadApiMeetings = () =>
+    api
+      .meetings()
+      .then((list) => {
+        setApiMeetings(list)
+        setBackendError("")
+      })
+      .catch(() => setBackendError("Amber's backend isn't reachable. Start it on port 8000."))
+  useEffect(() => {
+    void loadApiMeetings()
+  }, [])
+  useAmberEvents((event) => {
+    if (event.type === "meeting.status" || event.type === "meeting.recap") void loadApiMeetings()
+  })
+  // Show the meet type (category) name like local meetings do; the status goes in the badge.
+  const withMeetType = (meet: ScheduledMeet): ScheduledMeet => {
+    const category = workspaces
+      .find(({ id }) => id === meet.workspaceId)
+      ?.categories.find(({ id }) => id === meet.categoryId)
+    return category ? { ...meet, type: category.name } : meet
+  }
+  const displayByDate: Record<string, ScheduledMeet[]> = { ...meetingsByDate }
+  for (const m of [...apiMeetings].reverse()) {
+    const key = apiDateKey(m)
+    displayByDate[key] = [...(displayByDate[key] ?? []), withMeetType(toScheduledMeet(m))]
+  }
+  const openApiMeeting = async (apiId: number) => {
+    const m = apiMeetings.find(({ id }) => id === apiId)
+    if (m && isLive(m.status)) {
+      setLiveMeetingId(apiId)
+      return
+    }
+    try {
+      setDetailMeeting(withMeetType(toReviewMeet(await api.meeting(apiId))))
+    } catch (e) {
+      setBackendError((e as Error).message)
+    }
+  }
+  const selectedMeetings = displayByDate[dateKey(selectedDate)] ?? []
   const weekDates = Array.from({ length: 7 }, (_, index) =>
     addDays(startOfWeek(selectedDate), index),
   )
@@ -4056,48 +4155,6 @@ function Dashboard() {
     setSelectedWorkspaceId(categoryWorkspaceId)
     setSelectedCategoryId(id)
     setCategoryWorkspaceId(null)
-  }
-
-  const storeMeeting = (
-    meeting: Omit<StoredMeeting, "id" | "createdAt" | "workspaceId" | "categoryId">,
-  ) => {
-    if (!selectedWorkspace || !selectedCategory) return
-    const id = `meeting-${Date.now()}`
-    setStoredMeetings((current) => [
-      ...current,
-      {
-        ...meeting,
-        id,
-        workspaceId: selectedWorkspace.id,
-        categoryId: selectedCategory.id,
-        createdAt: new Date().toISOString(),
-      },
-    ])
-    setMeetingsByDate((current) => ({
-      ...current,
-      [dateKey(today)]: [
-        ...(current[dateKey(today)] ?? []),
-        {
-          id,
-          title: meeting.name,
-          time: new Date().toLocaleTimeString("en-US", {
-            hour: "numeric",
-            minute: "2-digit",
-          }),
-          duration: "Live",
-          type: selectedCategory.name,
-          status: "upcoming",
-          workspaceId: selectedWorkspace.id,
-          categoryId: selectedCategory.id,
-          link: meeting.link,
-          context: meeting.agenda,
-          fileName: meeting.fileName,
-          fileId: meeting.fileId,
-          fileSize: meeting.fileSize,
-          fileType: meeting.fileType,
-        },
-      ],
-    }))
   }
 
   const scheduleMeeting = (draft: ScheduleDraft) => {
@@ -4253,7 +4310,7 @@ function Dashboard() {
     onNewCategory: setCategoryWorkspaceId,
     selectedDate,
     onSelectDate: setSelectedDate,
-    meetingsByDate,
+    meetingsByDate: displayByDate,
     workspaces,
     selectedWorkspaceId,
     selectedCategoryId,
@@ -4340,7 +4397,7 @@ function Dashboard() {
             {weekDates.map((date) => {
               const active = sameDay(date, selectedDate)
               const hasMeetings =
-                (meetingsByDate[dateKey(date)] ?? []).length > 0
+                (displayByDate[dateKey(date)] ?? []).length > 0
               const label = date
                 .toLocaleDateString("en-US", { weekday: "short" })
                 .toUpperCase()
@@ -4381,6 +4438,38 @@ function Dashboard() {
           </div>
         </header>
 
+        <nav className="mx-auto flex w-full max-w-[1240px] gap-2 px-5 pt-3 md:px-8 xl:px-10" aria-label="Sections">
+          {(
+            [
+              ["meetings", "Meetings"],
+              ["records", "Records"],
+              ["outbox", "Outbox"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              className={`rounded-full px-4 py-2 text-sm font-bold transition ${
+                view === id && liveMeetingId === null
+                  ? "bg-[#e8f0ff] text-[#3479f5]"
+                  : "text-[#53617a] hover:bg-[#f5f7fb]"
+              }`}
+              type="button"
+              aria-current={view === id ? "page" : undefined}
+              onClick={() => {
+                setView(id)
+                setLiveMeetingId(null)
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+        {backendError && (
+          <p className="mx-auto mt-3 w-full max-w-[940px] rounded-xl bg-[#fff1f1] px-4 py-2.5 text-sm font-semibold text-[#c04d4d]">
+            {backendError}
+          </p>
+        )}
+
         {detailMeeting ? (
           <MeetingDetail
             meeting={detailMeeting}
@@ -4391,12 +4480,25 @@ function Dashboard() {
             }
             onBack={() => setDetailMeeting(null)}
           />
+        ) : liveMeetingId !== null ? (
+          <LiveMeeting
+            meetingId={liveMeetingId}
+            onBack={() => setLiveMeetingId(null)}
+            onOpenRecap={(m) => {
+              setLiveMeetingId(null)
+              setDetailMeeting(withMeetType(toReviewMeet(m)))
+            }}
+          />
+        ) : view === "records" ? (
+          <RecordsPage />
+        ) : view === "outbox" ? (
+          <OutboxPage />
         ) : (
           <div className="relative mx-auto mt-5 flex w-full max-w-[1240px] flex-1 flex-col gap-6 px-5 pb-8 md:px-8 xl:px-10">
             {sameDay(selectedDate, today) && (
               <>
                 <div
-                  className="pointer-events-none absolute left-0 top-[42%] hidden -translate-y-1/2 min-[1400px]:block"
+                  className="pointer-events-none absolute left-0 top-[42%] hidden -translate-y-1/2 min-[1680px]:block"
                   aria-hidden="true"
                 >
                   <div className="h-40 w-32 rounded-full bg-[radial-gradient(circle,#eef5ff_0%,transparent_68%)]" />
@@ -4407,7 +4509,7 @@ function Dashboard() {
                   />
                 </div>
                 <div
-                  className="pointer-events-none absolute bottom-4 right-0 hidden min-[1400px]:block"
+                  className="pointer-events-none absolute bottom-4 right-0 hidden min-[1680px]:block"
                   aria-hidden="true"
                 >
                   <div className="absolute bottom-0 right-0 h-44 w-32 rounded-full bg-[radial-gradient(circle_at_bottom,#eef5ff_0%,transparent_70%)]" />
@@ -4451,7 +4553,10 @@ function Dashboard() {
                     <QuickJoinCard
                       workspace={selectedWorkspace}
                       category={selectedCategory}
-                      onStore={storeMeeting}
+                      onDispatched={(id) => {
+                        void loadApiMeetings()
+                        setLiveMeetingId(id)
+                      }}
                     />
                   </div>
                 </>
@@ -4505,7 +4610,16 @@ function Dashboard() {
                   </div>
                   <div className="space-y-3">
                     {selectedMeetings.map((meeting, index) => {
-                      const completed = isPastDate || meeting.status === "ended"
+                      const apiId = meeting.id?.startsWith("api-")
+                        ? Number(meeting.id.slice(4))
+                        : null
+                      const completed =
+                        meeting.status === "ended" || (apiId === null && isPastDate)
+                      const clickable = completed || apiId !== null
+                      const open = () =>
+                        apiId !== null
+                          ? void openApiMeeting(apiId)
+                          : completed && setDetailMeeting(meeting)
                       const meetingWorkspace = workspaces.find(
                         ({ id }) => id === meeting.workspaceId,
                       )
@@ -4514,21 +4628,17 @@ function Dashboard() {
                       )
                       return (
                         <div
-                          key={`${meeting.title}-${meeting.time}`}
+                          key={meeting.id ?? `${meeting.title}-${meeting.time}`}
                           className={`flex w-full items-center gap-4 rounded-2xl border border-[#dce5f2] bg-white p-4 text-left shadow-[0_8px_24px_rgba(43,67,114,0.05)] md:p-5 ${
-                            completed
+                            clickable
                               ? "cursor-pointer transition hover:-translate-y-0.5 hover:border-[#b9cbea] hover:shadow-[0_12px_28px_rgba(43,67,114,0.09)]"
                               : ""
                           }`}
-                          role={completed ? "button" : undefined}
-                          tabIndex={completed ? 0 : undefined}
-                          onClick={() => completed && setDetailMeeting(meeting)}
+                          role={clickable ? "button" : undefined}
+                          tabIndex={clickable ? 0 : undefined}
+                          onClick={open}
                           onKeyDown={(event) => {
-                            if (
-                              completed &&
-                              (event.key === "Enter" || event.key === " ")
-                            )
-                              setDetailMeeting(meeting)
+                            if (event.key === "Enter" || event.key === " ") open()
                           }}
                         >
                           <span
@@ -4561,7 +4671,7 @@ function Dashboard() {
                               </span>
                             </span>
                           </span>
-                          {!completed && (
+                          {!completed && apiId === null && (
                             <button
                               className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold transition sm:px-4 sm:py-2.5 ${
                                 hasDailyAgenda
@@ -4598,7 +4708,11 @@ function Dashboard() {
                                 : "bg-[#eef4ff] text-[#4974ce]"
                             }`}
                           >
-                            {completed ? "Completed" : "Upcoming"}
+                            {apiId !== null
+                              ? statusLabel(apiMeetings.find(({ id }) => id === apiId)?.status ?? "")
+                              : completed
+                                ? "Completed"
+                                : "Upcoming"}
                           </span>
                         </div>
                       )
@@ -4610,7 +4724,10 @@ function Dashboard() {
                     <QuickJoinCard
                       workspace={selectedWorkspace}
                       category={selectedCategory}
-                      onStore={storeMeeting}
+                      onDispatched={(id) => {
+                        void loadApiMeetings()
+                        setLiveMeetingId(id)
+                      }}
                     />
                   </div>
                 )}
