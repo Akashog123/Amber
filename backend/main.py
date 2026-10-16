@@ -216,6 +216,7 @@ def handle_event(mid: int, event: str, data: dict):
 
     if event == "transcript.partial_data":
         yield_floor(mid)
+        still_talking(mid, who)
     elif event == "transcript.data":
         words = inner.get("words") or []
         text = " ".join(w["text"] for w in words).strip()
@@ -299,6 +300,16 @@ def on_speech(mid: int, speaker: str, text: str, addressed: bool):
     delay = DEBOUNCE if has_content(" ".join(q["parts"])) else BARE_WAIT
     q["task"] = _spawn(_reply(mid, speaker, q, delay=delay, key=key))
     pending[key] = q
+
+
+def still_talking(mid: int, speaker: str):
+    """A partial transcript from someone with a pending question: restart the wait, so Amber answers
+    DEBOUNCE after their last word even when the ASR splits "Amber," and the question into separate finals."""
+    q = pending.get((mid, speaker))
+    if q and not q.get("generating"):
+        q["task"].cancel()
+        delay = DEBOUNCE if has_content(" ".join(q["parts"])) else BARE_WAIT
+        q["task"] = _spawn(_reply(mid, speaker, q, delay=delay, key=(mid, speaker)))
 
 
 def has_content(text: str) -> bool:

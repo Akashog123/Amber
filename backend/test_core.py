@@ -123,6 +123,17 @@ say(d["bot_id"], "Priya", "what's the status of the vfd drives")
 time.sleep(0.8)
 assert asked == ["amber what's the status of the vfd drives"], asked
 
+# Live Deepgram case: "Amber," final, the asker keeps talking (partials) past BARE_WAIT, then the question.
+asked.clear()
+say(d["bot_id"], "Akash", "Amber,")
+for _ in range(4):  # 4 x 0.2s of partials = 0.8s, longer than BARE_WAIT (0.5s)
+    time.sleep(0.2)
+    c.post("/webhooks/recall?token=t", json={**replay.payload(d["bot_id"], 0, "say", "Akash", "what's the"),
+                                             "event": "transcript.partial_data"}).raise_for_status()
+say(d["bot_id"], "Akash", "what's the status of Chiller two?")
+time.sleep(0.8)
+assert asked == ["Amber, what's the status of Chiller two?"], asked
+
 # Every model down -> Amber says sorry instead of going silent.
 async def broken_answer(mid, speaker, question):
     raise RuntimeError("503 UNAVAILABLE")
