@@ -7,7 +7,8 @@ from google.genai import types
 import db
 
 FALLBACK = "I don't have that information in my current records."
-MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]  # second one has higher free-tier limits
+# 2.5 models 404 for new keys; lite models were slower (5-7s) in testing. Second = fallback on 429/503.
+MODELS = [os.getenv("GEMINI_MODEL", "gemini-3.5-flash"), "gemini-3.8-flash"]
 
 ANSWER_RULES = f"""You are Amber, an AI participant in a live work meeting. You were just addressed by name.
 Reply in 1-2 short spoken sentences, under 35 words. No markdown, no lists, no preamble.
@@ -54,7 +55,9 @@ async def answer(mid: int, speaker: str, question: str) -> str:
     for model in MODELS:
         try:
             r = await client().aio.models.generate_content(model=model, contents=prompt, config=cfg)
+            if r.candidates and r.candidates[0].finish_reason == types.FinishReason.MAX_TOKENS:
+                raise RuntimeError(f"{model} hit the token cap, reply would be cut off")
             return (r.text or "").strip() or FALLBACK
-        except Exception as e:  # 429 / overload on the first model -> try the lite one
+        except Exception as e:  # 429 / 503 overload / truncation -> try the next model
             err = e
     raise err

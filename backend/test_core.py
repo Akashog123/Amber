@@ -9,6 +9,7 @@ os.environ["WEBHOOK_TOKEN"] = "t"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+import asyncio  # noqa: E402
 import time  # noqa: E402
 
 import brain  # noqa: E402
@@ -28,6 +29,7 @@ asked = []
 
 async def fake_answer(mid, speaker, question):
     asked.append(question)
+    await asyncio.sleep(0.15)  # answer is "in flight" for a moment, like the real API
     return brain.FALLBACK if "marketing" in question else f"answer to {speaker}"
 
 brain.answer = fake_answer
@@ -75,4 +77,16 @@ assert asked == ["Amber, what's the status of the pump actually no, the chiller 
 say(d["bot_id"], "Rahul", "Amber, how many PPE kits")
 say(d["bot_id"], "Rahul", "oh never mind, found it")
 assert replies(d["id"])[0] == ["answer to Akash"]  # still only the earlier answer
+# Once Amber is answering, the asker moving on doesn't rewrite the question; a correction does.
+asked.clear()
+say(d["bot_id"], "Priya", "Amber, who owns the boiler?")
+time.sleep(0.15)  # debounce fired, answer in flight
+say(d["bot_id"], "Priya", "Okay, next item is the PPE order.")
+time.sleep(0.6)
+assert asked == ["Amber, who owns the boiler?"], asked
+say(d["bot_id"], "Priya", "Amber, who owns the boiler?")
+time.sleep(0.15)
+say(d["bot_id"], "Priya", "actually I mean the cooling tower")
+time.sleep(0.6)
+assert asked[-1] == "Amber, who owns the boiler? actually I mean the cooling tower", asked
 print("ok")

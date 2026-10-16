@@ -209,6 +209,7 @@ def handle_event(mid: int, event: str, data: dict):
 # talking for DEBOUNCE seconds; if they keep talking (rephrasing, changing their mind)
 # the pending answer is cancelled and rebuilt from everything they said.
 DEBOUNCE = float(os.getenv("AMBER_DEBOUNCE", "1.0"))
+CORRECTION = re.compile(r"\b(actually|i mean|sorry|instead|rather|wait)\b", re.I)
 CANCEL = re.compile(r"\b(never ?mind|forget it|cancel that|scratch that|no worries)\b", re.I)
 pending: dict[tuple[int, str], dict] = {}  # (meeting, speaker) -> {"parts": [...], "task": Task}
 speaking_until: dict[int, float] = {}       # meeting -> monotonic time Amber's audio ends
@@ -233,6 +234,8 @@ def on_speech(mid: int, speaker: str, text: str, addressed: bool):
         return
     if not (addressed or q):
         return
+    if q and q.get("generating") and not (addressed or CORRECTION.search(text)):
+        return  # answer already in flight; the asker moving on doesn't rewrite it
     if q:
         q["task"].cancel()  # asker is still talking -> restart with the fuller question
     q = q or {"parts": []}
@@ -257,6 +260,7 @@ def yield_floor(mid: int):
 
 async def _reply(mid: int, speaker: str, q: dict, delay: float, via_chat=False, key=None):
     await asyncio.sleep(delay)
+    q["generating"] = True
     question = " ".join(q["parts"])
     t0 = time.perf_counter()
     try:
