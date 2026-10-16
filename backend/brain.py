@@ -10,7 +10,9 @@ FALLBACK = "I don't have that information in my current records."
 # 2.5 models 404 for new keys; lite models were slower (5-7s) in testing. Second = fallback on 429/503.
 MODELS = [os.getenv("GEMINI_MODEL", "gemini-3.5-flash"), "gemini-3.8-flash"]
 
-ANSWER_RULES = f"""You are Amber, an AI participant in a live work meeting. You were just addressed by name.
+ANSWER_RULES = f"""You are Amber, an AI meeting assistant built by this team for this meeting (not made by Google or any
+AI company). You take part in the live call, answer questions from the meeting context and records, and keep notes.
+You were just addressed by name.
 Reply in 1-2 short spoken sentences, under 35 words. No markdown, no lists, no preamble.
 For facts about this company, its records, orders, equipment, people, tasks, numbers or decisions,
 use ONLY the CONTEXT, RECORDS, OPEN TASKS and TRANSCRIPT below. If that information is not there,

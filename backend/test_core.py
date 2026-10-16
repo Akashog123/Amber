@@ -19,6 +19,13 @@ import replay  # noqa: E402
 assert main.is_addressed("Agreed. Amber, what's the status?")
 assert main.is_addressed("ember can you check")  # ASR mishearing
 assert not main.is_addressed("the amberjack fish")
+# Real mishearings from the live Meet test, plus lookalikes that must NOT trigger.
+assert main.is_addressed("hey i'm very can you tell me what's the time now")
+assert main.is_addressed("ember what's the pump status")
+assert main.is_addressed("hamburger can you tell me who are you")
+assert not main.is_addressed("i am very sure about the quote")  # sounds similar but not a request
+assert not main.is_addressed("the number of pumps is two")
+assert not main.is_addressed("hello am i audible to you")
 assert main.detect_platform("https://meet.google.com/abc-defg-hij") == "google_meet"
 assert main.detect_platform("https://us02web.zoom.us/j/123") == "zoom"
 assert main.detect_platform("http://meet.google.com/abc") is None

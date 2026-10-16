@@ -24,6 +24,7 @@ import voice  # noqa: E402
 app = FastAPI(title="Amber Live")
 seed.seed()  # creates tables + mock records; idempotent
 WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN", "")
+LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 # ASR often mishears the name; chat may also start with "@Amber".
 WAKE = re.compile(r"\b(amber|ember|amba|ambar|umber)\b", re.I)
 PLATFORMS = {"meet.google.com": "google_meet", "zoom.us": "zoom", "teams.microsoft.com": "microsoft_teams",
@@ -40,8 +41,33 @@ def publish(type_: str, meeting_id: int | None, data: dict):
         q.put_nowait(msg)
 
 
+QUESTION = re.compile(r"\b(can you|could you|would you|tell me|what|what's|who|whose|when|where|how|which|"
+                      r"why|is there|are there|do we|did we|status|update|please|give me|check)\b", re.I)
+_SOUNDEX = {**dict.fromkeys("bfpv", "1"), **dict.fromkeys("cgjkqsxz", "2"), **dict.fromkeys("dt", "3"),
+            "l": "4", **dict.fromkeys("mn", "5"), "r": "6"}
+
+
+def _soundex_tail(word: str) -> str:
+    """Soundex digits after the first letter ("amber" -> "516"; v sounds like b, so "i'm very" -> "516")."""
+    out, prev = "", _SOUNDEX.get(word[0], "")
+    for ch in word[1:]:
+        code = _SOUNDEX.get(ch, "")
+        if code and code != prev:
+            out += code
+        if ch not in "hw":
+            prev = code
+    return out[:3]
+
+
 def is_addressed(text: str) -> bool:
-    return bool(WAKE.search(text))
+    if WAKE.search(text):
+        return True
+    # Streaming ASR mangles the name ("hey amber" -> "hey i'm very"). Fuzzy-match only near the
+    # start and only for request-shaped lines, so "I am very sure" doesn't summon Amber.
+    words = re.sub(r"[^a-z ]", "", text.lower()).split()[:4]
+    candidates = words + [a + b for a, b in zip(words, words[1:])]
+    sounds_like = any(c[0] in "aeiouh" and _soundex_tail(c) == "516" for c in candidates)  # "hamburger"
+    return sounds_like and bool(QUESTION.search(text))
 
 
 def detect_platform(url: str) -> str | None:
@@ -158,6 +184,11 @@ async def recall_webhook(request: Request):
     payload = await request.json()
     event, data = payload.get("event", ""), payload.get("data") or {}
     bot_id = (data.get("bot") or {}).get("id")
+    if bot_id and not bot_id.startswith("replay-"):
+        # Raw payloads per bot, for checking real shapes against replay.py (logs/ is gitignored).
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(os.path.join(LOG_DIR, f"recall-{bot_id}.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
     m = db.row("SELECT id FROM meetings WHERE bot_id=?", bot_id)
     if not m:
         return {"ignored": "unknown bot"}
@@ -213,6 +244,8 @@ CORRECTION = re.compile(r"\b(actually|i mean|sorry|instead|rather|wait)\b", re.I
 CANCEL = re.compile(r"\b(never ?mind|forget it|cancel that|scratch that|no worries)\b", re.I)
 pending: dict[tuple[int, str], dict] = {}  # (meeting, speaker) -> {"parts": [...], "task": Task}
 speaking_until: dict[int, float] = {}       # meeting -> monotonic time Amber's audio ends
+FOLLOWUP = float(os.getenv("AMBER_FOLLOWUP", "10"))  # seconds after a reply the asker can follow up
+followup: dict[int, tuple[str, float]] = {}  # meeting -> (last asker, follow-up window end)
 _tasks: set[asyncio.Task] = set()
 
 
@@ -232,6 +265,9 @@ def on_speech(mid: int, speaker: str, text: str, addressed: bool):
             pending.pop(key)
             publish("amber.cancelled", mid, {"speaker": speaker})
         return
+    who, until = followup.get(mid, ("", 0))
+    if not addressed and who == speaker and time.monotonic() < until and QUESTION.search(text):
+        addressed = True  # follow-up to Amber's last answer; no need to say her name again
     if not (addressed or q):
         return
     if q and q.get("generating") and not (addressed or CORRECTION.search(text)):
@@ -288,6 +324,7 @@ async def _reply(mid: int, speaker: str, q: dict, delay: float, via_chat=False, 
             await recall.output_audio(bot, mp3)
         if mp3:
             speaking_until[mid] = time.monotonic() + len(mp3) / 16000  # 128 kbps = 16 KB/s
+        followup[mid] = (speaker, max(speaking_until.get(mid, 0), time.monotonic()) + FOLLOWUP)
     latency = {"llm": round(t_llm - t0, 2), "tts": round(t_tts - t_llm, 2), "total": round(time.perf_counter() - t0, 2)}
     print(f"[amber] {speaker}: {question!r} -> {text!r} {latency}")
     publish("amber.reply", mid, {"to": speaker, "question": question, "text": text,
