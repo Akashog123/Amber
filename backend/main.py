@@ -70,6 +70,15 @@ def is_addressed(text: str) -> bool:
     return sounds_like and bool(QUESTION.search(text))
 
 
+def keyterms(mid: int) -> list[str]:
+    """Words the transcriber should expect: Amber's name first, then attendees, record IDs, names and owners."""
+    terms = ["Amber"]
+    terms += [a["name"] for a in db.rows("SELECT name FROM attendees WHERE meeting_id=?", mid)]
+    for r in db.rows("SELECT id, name, owner FROM records ORDER BY id"):
+        terms += [r["id"], r["name"], r["owner"]]
+    return list(dict.fromkeys(t.strip() for t in terms if t and t.strip()))
+
+
 def detect_platform(url: str) -> str | None:
     p = urlparse(url)
     if p.scheme != "https":
@@ -108,7 +117,7 @@ async def dispatch(body: Dispatch):
     if recall.enabled() and not body.replay:
         hook = f"{os.environ['PUBLIC_URL'].rstrip('/')}/webhooks/recall?token={WEBHOOK_TOKEN}"
         try:
-            bot_id = await recall.create_bot(body.url, hook)
+            bot_id = await recall.create_bot(body.url, hook, keyterms(mid))
         except Exception as e:
             db.execute("UPDATE meetings SET status='failed' WHERE id=?", mid)
             raise HTTPException(502, f"Recall bot creation failed: {e}")

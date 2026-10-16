@@ -29,13 +29,27 @@ def _client() -> httpx.AsyncClient:
     )
 
 
-async def create_bot(meeting_url: str, webhook_url: str) -> str:
+def transcript_provider(keyterms: list[str]) -> dict:
+    """Deepgram nova-3 (Indian English + boosted names) when enabled, else Recall's own English-only ASR.
+    Deepgram's key lives in the Recall dashboard (Transcription settings), not here."""
+    if os.getenv("RECALL_TRANSCRIBER", "recall") != "deepgram":
+        return {"recallai_streaming": {"mode": "prioritize_low_latency", "language_code": "en"}}
+    return {"deepgram_streaming": {
+        "model": "nova-3",
+        "language": os.getenv("DEEPGRAM_LANGUAGE", "en-IN"),
+        "keyterm": keyterms[:50],  # boosts "Amber" and record names; Deepgram caps the keyterm prompt size
+        "smart_format": True,
+        "endpointing": int(os.getenv("DEEPGRAM_ENDPOINTING_MS", "300")),  # silence before a segment is final
+        "mip_opt_out": True,  # don't let Deepgram train on meeting audio
+    }}
+
+
+async def create_bot(meeting_url: str, webhook_url: str, keyterms: list[str] = ()) -> str:
     body = {
         "meeting_url": meeting_url,
         "bot_name": "Amber",
         "recording_config": {
-            "transcript": {"provider": {"recallai_streaming": {
-                "mode": "prioritize_low_latency", "language_code": "en"}}},
+            "transcript": {"provider": transcript_provider(list(keyterms))},
             "participant_events": {},
             "realtime_endpoints": [{"type": "webhook", "url": webhook_url, "events": EVENTS}],
         },

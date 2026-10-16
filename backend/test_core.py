@@ -3,8 +3,9 @@ import os
 import tempfile
 
 os.environ["AMBER_DB"] = os.path.join(tempfile.mkdtemp(), "test.db")
-for k in ("RECALL_API_KEY", "ELEVENLABS_API_KEY", "GEMINI_API_KEY"):
-    os.environ.pop(k, None)
+# Blank (not pop): main's load_dotenv() would otherwise re-load real keys from .env and hit live APIs.
+for k in ("RECALL_API_KEY", "ELEVENLABS_API_KEY", "GEMINI_API_KEY", "LLM_BASE_URL", "RECALL_TRANSCRIBER"):
+    os.environ[k] = ""
 os.environ["WEBHOOK_TOKEN"] = "t"
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -97,6 +98,16 @@ time.sleep(0.15)
 say(d["bot_id"], "Priya", "actually I mean the cooling tower")
 time.sleep(0.6)
 assert asked[-1] == "Amber, who owns the boiler? actually I mean the cooling tower", asked
+# Transcriber: Recall's English by default; Deepgram en-IN with Amber + record names when enabled.
+import recall  # noqa: E402
+terms = main.keyterms(mid)
+assert terms[0] == "Amber" and "PO-1041" in terms and "Akash" in terms and len(terms) == len(set(terms))
+assert "recallai_streaming" in recall.transcript_provider(terms)
+os.environ["RECALL_TRANSCRIBER"] = "deepgram"
+dg = recall.transcript_provider(terms)["deepgram_streaming"]
+assert dg["model"] == "nova-3" and dg["language"] == "en-IN" and dg["keyterm"][0] == "Amber"
+os.environ["RECALL_TRANSCRIBER"] = ""
+
 # Fillers fit the question; greetings and questions about Amber herself get none.
 assert main.filler_kind("amber what's the status of the pump order") == "lookup"
 assert main.filler_kind("amber what is a vfd drive") == "think"
