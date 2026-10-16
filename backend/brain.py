@@ -1,5 +1,5 @@
 """LLM reasoning. Any OpenAI-compatible server (LLM_BASE_URL, e.g. a local proxy) and/or Gemini.
-Grounded answers, task extraction and record tagging; MOM comes next."""
+Grounded answers, task extraction, record tagging and the post-meeting MOM."""
 import asyncio
 import json
 import os
@@ -171,3 +171,31 @@ async def extract(mid: int, after_id: int) -> tuple[dict, int]:
         + "\n\nEARLIER CONTEXT (already processed):\n" + ("\n".join(f"{u['speaker']}: {u['text']}" for u in before) or "-")
         + "\n\nNEW TRANSCRIPT:\n" + "\n".join(f"{u['speaker']}: {u['text']}" for u in new))
     return _parse_json(await complete(EXTRACT_RULES, prompt, max_tokens=1200)), new[-1]["id"]
+
+
+MOM_RULES = """You write the Minutes of Meeting (MOM) for a work meeting from its transcript.
+Return ONLY a JSON object, no prose, no code fences:
+{"executive_summary": "3-5 sentences: what the meeting was about and what came out of it",
+ "agenda_alignment": [{"item": "agenda item", "status": "covered|partly covered|not covered", "notes": "one line"}],
+ "decisions": ["each decision actually made, one line each"],
+ "open_questions": ["things raised but left unresolved or deferred, one line each"]}
+Rules: use only what is in the transcript, records and tasks given. Do not invent decisions; a commitment
+someone made is a task, not a decision. If there was no agenda, use an empty agenda_alignment list.
+Use empty lists when nothing applies. Lines from "Amber" are the AI assistant's answers."""
+
+
+async def make_mom(mid: int) -> dict:
+    """Narrative parts of the MOM from the LLM. Facts (tasks, record notes, attendance) are added by the caller
+    straight from the database, so they can't be hallucinated."""
+    m = db.row("SELECT title, agenda, context_text FROM meetings WHERE id=?", mid) or {}
+    lines = db.rows("SELECT speaker, text FROM utterances WHERE meeting_id=? ORDER BY id", mid)
+    tasks = db.rows("SELECT title, owner, due_at, status FROM tasks WHERE meeting_id=?", mid)
+    notes = db.rows("SELECT record_id, note FROM record_notes WHERE meeting_id=?", mid)
+    prompt = (f"MEETING: {m.get('title')}\nAGENDA:\n{m.get('agenda') or '-'}\nCONTEXT:\n{m.get('context_text') or '-'}\n\n"
+              "TASKS CAPTURED:\n" + ("\n".join(f"- {t['owner']}: {t['title']} (due {t['due_at']}, {t['status']})"
+                                              for t in tasks) or "-")
+              + "\n\nRECORD UPDATES:\n" + ("\n".join(f"- {n['record_id']}: {n['note']}" for n in notes) or "-")
+              + "\n\nTRANSCRIPT:\n" + "\n".join(f"{u['speaker']}: {u['text']}" for u in lines))
+    out = _parse_json(await complete(MOM_RULES, prompt, max_tokens=1500))
+    return {k: out.get(k) or ([] if k != "executive_summary" else "") for k in
+            ("executive_summary", "agenda_alignment", "decisions", "open_questions")}

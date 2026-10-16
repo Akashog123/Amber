@@ -3,6 +3,7 @@
   uv run python replay.py                 # dispatch a new replay meeting and play the script
   uv run python replay.py --speed 0       # no delays (tests)
   uv run python replay.py --bot <bot_id>  # feed an existing meeting
+  uv run python replay.py --email you@gmail.com  # recap + reminders land in your inbox
 
 Payloads mirror Recall's real-time webhook shapes (docs.recall.ai/docs/real-time-event-payloads).
 """
@@ -68,11 +69,11 @@ def payload(bot_id: str, t: float, kind: str, who: str | None, text: str | None)
                                      "bot": bot}}
 
 
-def run(client: httpx.Client, bot_id: str | None = None, speed: float = 1.0) -> int:
+def run(client: httpx.Client, bot_id: str | None = None, speed: float = 1.0, email: str = "") -> int:
     if not bot_id:
         r = client.post("/api/meetings/dispatch", json={
             "title": "Weekly Procurement Sync (replay)", "url": "https://meet.google.com/abc-defg-hij",
-            "agenda": AGENDA, "attendees": ATTENDEES, "series_id": "weekly-procurement", "replay": True})
+            "agenda": AGENDA, "attendees": [{**a, "email": email or a["email"]} for a in ATTENDEES], "series_id": "weekly-procurement", "replay": True})
         r.raise_for_status()
         bot_id = r.json()["bot_id"]
     token = os.getenv("WEBHOOK_TOKEN", "")
@@ -91,8 +92,9 @@ if __name__ == "__main__":
     ap.add_argument("--base", default="http://localhost:8000")
     ap.add_argument("--bot")
     ap.add_argument("--speed", type=float, default=4.0, help="1 = real time, 0 = no delay")
+    ap.add_argument("--email", default="", help="give every attendee this address, e.g. your inbox, to receive the recap")
     a = ap.parse_args()
     from dotenv import load_dotenv
     load_dotenv()
     with httpx.Client(base_url=a.base, timeout=60) as c:
-        print("meeting", run(c, a.bot, a.speed))
+        print("meeting", run(c, a.bot, a.speed, a.email))

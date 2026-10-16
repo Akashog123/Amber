@@ -4,7 +4,7 @@ import tempfile
 
 os.environ["AMBER_DB"] = os.path.join(tempfile.mkdtemp(), "test.db")
 # Blank (not pop): main's load_dotenv() would otherwise re-load real keys from .env and hit live APIs.
-for k in ("RECALL_API_KEY", "ELEVENLABS_API_KEY", "GEMINI_API_KEY", "LLM_BASE_URL", "RECALL_TRANSCRIBER"):
+for k in ("RECALL_API_KEY", "ELEVENLABS_API_KEY", "GEMINI_API_KEY", "LLM_BASE_URL", "RECALL_TRANSCRIBER", "SMTP_USER", "AMBER_DEMO_REMINDER_MINUTES"):
     os.environ[k] = ""
 os.environ["WEBHOOK_TOKEN"] = "t"
 
@@ -16,6 +16,7 @@ import time  # noqa: E402
 import brain  # noqa: E402
 import main  # noqa: E402
 import db  # noqa: E402
+import mailer  # noqa: E402
 import replay  # noqa: E402
 import seed  # noqa: E402
 
@@ -69,7 +70,7 @@ def replies(mid):
 assert c.post("/webhooks/recall?token=wrong", json={}).status_code == 401
 mid = replay.run(c, speed=20)  # real gaps between lines (shortest 0.05s... see SCRIPT)
 m = c.get(f"/api/meetings/{mid}").json()
-assert m["status"] == "done" and m["ended_at"], m["status"]
+assert m["status"] in ("done", "processing", "completed") and m["ended_at"], m["status"]
 voice, chat = replies(mid)
 m = c.get(f"/api/meetings/{mid}").json()
 assert voice == ["answer to Akash", brain.FALLBACK], voice  # both spoken questions answered, in order
@@ -197,6 +198,69 @@ asyncio.run(main.apply_extraction(E, {"task_updates": [{"task_id": tid, "status"
                                       "tasks": [{"title": "Send vendor quote", "owner": "Rahul"}]}))
 t = c.get(f"/api/meetings/{E}").json()["tasks"]
 assert len(t) == 1 and t[0]["status"] == "done" and t[0]["last_update"] == "quote sent", t
+
+# --- Post-meeting: MOM + recap email + reminders (LLM and SMTP stubbed) ---
+sent = []
+mailer._send_sync = lambda to, subject, html, text: sent.append((to, subject, html, text))
+os.environ["SMTP_USER"] = "amber@example.com"
+
+
+async def fake_mom(mid):
+    return {"executive_summary": "Pump quote and PPE order discussed.", "decisions": ["Renew the chiller AMC"],
+            "agenda_alignment": [{"item": "Pump order", "status": "covered", "notes": "quote by Friday"}],
+            "open_questions": ["Replace or repair the compressor?"]}
+
+brain.make_mom = fake_mom
+with db.db() as conn:
+    conn.execute("UPDATE tasks SET status='open' WHERE meeting_id=?", (E,))  # reopen the task marked done above
+    conn.execute("INSERT INTO participants (meeting_id,name,joined_at,left_at) VALUES (?,?,?,?)",
+                 (E, "Rahul <script>", "2026-10-17T05:00:00+00:00", "2026-10-17T05:30:00+00:00"))
+asyncio.run(main.post_meeting(E))
+m = c.get(f"/api/meetings/{E}").json()
+assert m["status"] == "completed" and m["mom"]["decisions"] == ["Renew the chiller AMC"]
+(to, subject, html, text), = sent
+assert to == ["rahul@example.com", "priya@example.com"] and subject == "Recap: x", (to, subject)
+for part in ("Pump quote and PPE order discussed.", "Renew the chiller AMC", "Send vendor quote", "Rahul",
+             "PO-1046: Delivery slipped two weeks", "Replace or repair the compressor?", "05:00"):
+    assert part in html and part in text, part
+assert "<script>" not in html and "Rahul &lt;script&gt;" in html  # meeting data is escaped
+asyncio.run(main.post_meeting(E))
+assert len(sent) == 1  # once per meeting unless forced
+c.post(f"/api/meetings/{E}/recap").raise_for_status()
+assert len(sent) == 2
+assert [o["status"] for o in c.get(f"/api/outbox?meeting_id={E}").json()] == ["sent", "sent"]
+
+# LLM down -> the recap still goes out with the facts.
+async def broken_mom(mid):
+    raise RuntimeError("503")
+
+brain.make_mom = broken_mom
+c.post(f"/api/meetings/{E}/recap").raise_for_status()
+assert "Summary unavailable" in sent[-1][2] and "Send vendor quote" in sent[-1][2]
+brain.make_mom = fake_mom
+
+# Reminders: one check-in per open task with an owner email, never twice; done tasks are left alone.
+db.execute("UPDATE meetings SET ended_at=? WHERE id=?", db.now(), E)
+main.DEMO_REMINDER_MIN = "0"
+sent.clear()
+asyncio.run(main.send_due_reminders())
+(to, subject, html, text), = sent
+assert to == ["rahul@example.com"] and subject == "Reminder: Send vendor quote (due 2026-10-23)", subject
+assert "Hi Rahul" in text and "quote sent" in text
+asyncio.run(main.send_due_reminders())
+assert len(sent) == 1
+main.DEMO_REMINDER_MIN = ""
+# Without the demo knob, a task due far ahead isn't reminded yet.
+tid2 = db.execute("INSERT INTO tasks (meeting_id,title,owner,owner_email,due_at,status) VALUES (?,?,?,?,?,'open')",
+                  E, "Later thing", "Priya", "priya@example.com", "2099-01-01")
+asyncio.run(main.send_due_reminders())
+assert len(sent) == 1
+# Broken SMTP: logged as failed once, not retried every loop.
+mailer._send_sync = lambda *a: (_ for _ in ()).throw(OSError("SMTP down"))
+db.execute("UPDATE tasks SET due_at='2000-01-01' WHERE id=?", tid2)
+asyncio.run(main.send_due_reminders())
+assert db.row("SELECT reminded_at FROM tasks WHERE id=?", tid2)["reminded_at"].startswith("failed:")
+assert c.get(f"/api/outbox?meeting_id={E}").json()[0]["status"] == "failed"
 
 # Every model down -> Amber says sorry instead of going silent.
 async def broken_answer(mid, speaker, question):

@@ -236,3 +236,15 @@ Each step ends with a check that must pass before moving on.
 ## 8. Explicitly cut for tonight
 Auth, multi-operator, durable queue/leases, recurrence UI changes, SSRF/upload hardening,
 splitting `App.tsx`, Gemini screen vision (unless all else is done), "<100 ms" barge-in claims.
+
+---
+
+## 9. Backlog (polish, after the core flow is done)
+
+- **Voice:** current voice feels flat for conversation. Try ElevenLabs **"Monika Sogam"** (female, Indian English)
+  for a more conversational, energetic and soothing feel; compare against 1-2 alternatives by ear.
+  Changing `ELEVENLABS_VOICE_ID` regenerates the cached fillers automatically.
+- **Hindi:** let Amber understand and answer in Hindi / Hinglish. eleven_v4_turbo speaks Hindi; Deepgram nova-3
+  `language: multi` handles code-switching (check latency vs `en-IN`). Answer prompt: reply in the asker's language.
+- **Voice lag:** sentence-split TTS (send the first sentence while the rest synthesizes), measure Recall's
+  output_audio playback delay, consider a faster reply model (turbo v2.5) with v4 only for fillers.

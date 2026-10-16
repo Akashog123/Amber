@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS pending_confirmations (
   id INTEGER PRIMARY KEY, meeting_id INTEGER, question TEXT, candidates_json TEXT,
   created_at TEXT, resolved INTEGER DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS outbox (
+  id INTEGER PRIMARY KEY, meeting_id INTEGER, kind TEXT, to_addr TEXT, subject TEXT, html TEXT, text TEXT,
+  status TEXT, error TEXT, ts TEXT
+);
 CREATE TABLE IF NOT EXISTS tasks (
   id INTEGER PRIMARY KEY, meeting_id INTEGER, series_id TEXT, title TEXT, owner TEXT,
   owner_email TEXT, due_at TEXT, status TEXT, last_update TEXT, reminded_at TEXT

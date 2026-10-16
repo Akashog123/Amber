@@ -81,3 +81,12 @@ async def stop_audio(bot_id: str):
 async def send_chat(bot_id: str, text: str):
     async with _client() as c:
         (await c.post(f"/bot/{bot_id}/send_chat_message/", json={"message": text})).raise_for_status()
+
+
+async def bot_status(bot_id: str) -> str:
+    """Latest status code (joining_call, in_call_recording, call_ended, done, fatal...)."""
+    async with _client() as c:
+        r = await c.get(f"/bot/{bot_id}/")
+        r.raise_for_status()
+        changes = r.json().get("status_changes") or [{}]
+        return changes[-1].get("code") or ""

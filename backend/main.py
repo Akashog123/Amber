@@ -4,6 +4,8 @@ import json
 import os
 import re
 import time
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -18,10 +20,18 @@ from pydantic import BaseModel  # noqa: E402
 import db  # noqa: E402
 import recall  # noqa: E402
 import brain  # noqa: E402
+import mailer  # noqa: E402
 import seed  # noqa: E402
 import voice  # noqa: E402
 
-app = FastAPI(title="Amber Live")
+@asynccontextmanager
+async def lifespan(_app):
+    loop_task = asyncio.create_task(background_loop())  # reminders + bot status polling
+    yield
+    loop_task.cancel()
+
+
+app = FastAPI(title="Amber Live", lifespan=lifespan)
 seed.seed()  # creates tables + mock records; idempotent
 WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN", "")
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
@@ -447,6 +457,7 @@ async def final_extract(mid: int):
             break
         await asyncio.sleep(0.2)
     await run_extract(mid)
+    await post_meeting(mid)  # MOM + recap email once the last tasks and notes are in
 
 
 def _attendee_email(mid: int, name: str | None) -> str:
@@ -549,3 +560,112 @@ def resolve_confirmation(mid: int, who: str, text: str) -> bool:
         _spawn(amber_chat(mid, "Okay, I won't update any record for that."))
     publish("confirmation.resolved", mid, {"chosen": chosen, "by": who})
     return True
+
+
+# --- after the meeting: MOM, recap email, follow-up reminders -------------------
+REMINDER_LEAD_H = float(os.getenv("AMBER_REMINDER_LEAD_HOURS", "24"))  # remind this long before the due date
+# Demo knob: remind N minutes after the meeting ends instead of waiting for the due date (empty = off).
+DEMO_REMINDER_MIN = os.getenv("AMBER_DEMO_REMINDER_MINUTES", "")
+LIVE_STATES = {"joining", "joining_call", "in_waiting_room", "in_call_not_recording", "in_call_recording", "recording"}
+recapping: set[int] = set()
+
+
+def _set_plain_status(mid: int, status: str):
+    db.execute("UPDATE meetings SET status=? WHERE id=?", status, mid)
+    publish("meeting.status", mid, {"status": status})
+
+
+async def post_meeting(mid: int, force: bool = False):
+    """MOM + recap email, once per meeting (force=True regenerates and resends)."""
+    m = db.row("SELECT * FROM meetings WHERE id=?", mid)
+    if not m or mid in recapping or (m["mom_json"] and not force):
+        return
+    recapping.add(mid)
+    try:
+        _set_plain_status(mid, "processing")
+        try:
+            mom = await brain.make_mom(mid)
+        except Exception as e:  # still send the facts (tasks, record updates, attendance) without the narrative
+            print(f"[mom] meeting {mid}: LLM failed: {e!r}")
+            mom = {"executive_summary": "Summary unavailable (the language model could not be reached).",
+                   "agenda_alignment": [], "decisions": [], "open_questions": []}
+        db.execute("UPDATE meetings SET mom_json=? WHERE id=?", json.dumps(mom), mid)
+        tasks = db.rows("SELECT * FROM tasks WHERE meeting_id=? ORDER BY id", mid)
+        notes = db.rows("SELECT * FROM record_notes WHERE meeting_id=? ORDER BY id", mid)
+        people = db.rows("SELECT name, joined_at, left_at FROM participants WHERE meeting_id=? ORDER BY id", mid)
+        subject, html, text = mailer.recap(m, mom, tasks, notes, people)
+        to = [a["email"] for a in db.rows("SELECT email FROM attendees WHERE meeting_id=?", mid)]
+        await mailer.send(mid, "recap", to, subject, html, text)
+        _set_plain_status(mid, "completed")
+        publish("meeting.recap", mid, {"mom": mom})
+    finally:
+        recapping.discard(mid)
+
+
+def _remind_at(t: dict) -> datetime | None:
+    if DEMO_REMINDER_MIN and t["ended_at"]:
+        return datetime.fromisoformat(t["ended_at"]) + timedelta(minutes=float(DEMO_REMINDER_MIN))
+    if t["due_at"]:
+        try:  # due dates are local calendar days: remind REMINDER_LEAD_H before 09:00 that day
+            day = datetime.fromisoformat(t["due_at"][:10]).replace(hour=9).astimezone()
+            return day - timedelta(hours=REMINDER_LEAD_H)
+        except ValueError:
+            pass
+    return datetime.fromisoformat(t["ended_at"]) + timedelta(hours=REMINDER_LEAD_H) if t["ended_at"] else None
+
+
+async def send_due_reminders():
+    """Follow up on commitments without anyone asking: one check-in email per open task, to its owner."""
+    due = db.rows("SELECT t.*, m.title AS meeting_title, m.ended_at FROM tasks t JOIN meetings m ON m.id=t.meeting_id "
+                  "WHERE t.status!='done' AND t.reminded_at IS NULL AND COALESCE(t.owner_email,'')!='' "
+                  "AND m.ended_at IS NOT NULL")
+    now = datetime.now(timezone.utc)
+    for t in due:
+        when = _remind_at(t)
+        if when and now >= when:
+            subject, html, text = mailer.reminder(t, t["meeting_title"])
+            if await mailer.send(t["meeting_id"], "reminder", [t["owner_email"]], subject, html, text):
+                db.execute("UPDATE tasks SET reminded_at=? WHERE id=?", db.now(), t["id"])
+                publish("task.reminded", t["meeting_id"], {"id": t["id"], "to": t["owner_email"]})
+            else:  # don't retry every 30s on a broken SMTP setup; the outbox has the error
+                db.execute("UPDATE tasks SET reminded_at=? WHERE id=?", "failed:" + db.now(), t["id"])
+
+
+async def watch_bots():
+    """Recall's status webhooks need dashboard setup; polling the live bots catches the end of the call anyway."""
+    if not recall.enabled():
+        return
+    for m in db.rows("SELECT id, bot_id, status FROM meetings WHERE bot_id NOT LIKE 'replay-%'"):
+        if m["status"] not in LIVE_STATES:
+            continue
+        try:
+            code = await recall.bot_status(m["bot_id"])
+        except Exception as e:
+            print(f"[watch] bot {m['bot_id']}: {e!r}")
+            continue
+        if code and code != m["status"]:
+            _set_status(m["id"], code)  # done / call_ended / fatal also start the post-meeting pipeline
+
+
+async def background_loop():
+    while True:
+        for job in (watch_bots, send_due_reminders):
+            try:
+                await job()
+            except Exception as e:
+                print(f"[background] {job.__name__}: {e!r}")
+        await asyncio.sleep(30)
+
+
+@app.post("/api/meetings/{mid}/recap")
+async def resend_recap(mid: int):
+    db.row("SELECT id FROM meetings WHERE id=?", mid) or _404()
+    await post_meeting(mid, force=True)
+    return db.meeting_detail(mid)
+
+
+@app.get("/api/outbox")
+async def outbox(meeting_id: int | None = None):
+    sql = "SELECT id, meeting_id, kind, to_addr, subject, status, error, ts FROM outbox"
+    return db.rows(sql + (" WHERE meeting_id=? ORDER BY id DESC" if meeting_id else " ORDER BY id DESC LIMIT 50"),
+                   *([meeting_id] if meeting_id else []))
