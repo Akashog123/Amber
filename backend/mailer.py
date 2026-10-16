@@ -20,7 +20,11 @@ def _send_sync(to: list[str], subject: str, html: str, text: str):
     msg.set_content(text)
     msg.add_alternative(html, subtype="html")
     with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ssl.create_default_context(), timeout=20) as s:
-        s.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"].replace(" ", ""))  # app passwords show with spaces
+        # AUTH LOGIN explicitly: on some networks Gmail drops the connection on smtplib's default AUTH PLAIN,
+        # and login() never falls back. Spaces are stripped because Google displays app passwords in groups.
+        s.ehlo()
+        s.user, s.password = os.environ["SMTP_USER"], os.environ["SMTP_PASS"].replace(" ", "")
+        s.auth("LOGIN", s.auth_login, initial_response_ok=False)
         s.send_message(msg)
 
 
