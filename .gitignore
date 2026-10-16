@@ -26,3 +26,4 @@ logs/
 __pycache__/
 *.db
 backend/logs-*.txt
+backend/assets/fillers/

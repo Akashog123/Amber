@@ -117,6 +117,8 @@ async def dispatch(body: Dispatch):
         bot_id, status = f"replay-{uuid4().hex[:8]}", "replay"  # no key: drive it with replay.py
     db.execute("UPDATE meetings SET bot_id=?, status=? WHERE id=?", bot_id, status, mid)
     publish("meeting.status", mid, {"status": status})
+    if os.getenv("ELEVENLABS_API_KEY"):
+        _spawn(voice.warm_fillers())  # synthesize + cache fillers before anyone asks anything
     return {"id": mid, "bot_id": bot_id, "status": status}
 
 
@@ -239,10 +241,19 @@ def handle_event(mid: int, event: str, data: dict):
 # Amber speaks only when addressed. The asker's question is buffered until they stop
 # talking for DEBOUNCE seconds; if they keep talking (rephrasing, changing their mind)
 # the pending answer is cancelled and rebuilt from everything they said.
-DEBOUNCE = float(os.getenv("AMBER_DEBOUNCE", "1.0"))
+DEBOUNCE = float(os.getenv("AMBER_DEBOUNCE", "0.7"))
+BARE_WAIT = float(os.getenv("AMBER_BARE_WAIT", "2.0"))  # just "Amber" so far: wait longer for the question
+FILLER_OVERLAP = float(os.getenv("AMBER_FILLER_OVERLAP", "0.3"))  # start the answer this early (Recall lag)
+_NOISE = {"hey", "hi", "hello", "ok", "okay", "so", "um", "uh", "yo", "and", "amber"}
+NO_FILLER = re.compile(r"\b(are you there|you there|can you hear me|hear me|audible|how are you|thank|thanks|"
+                       r"good morning|who are you|who made you|who built you|what are you)\b", re.I)
+LOOKUP = re.compile(r"\b(status|orders?|ordered|owns?|owner|who|when|where|records?|po|deliver\w*|inspection|"
+                    r"contracts?|eta|arriv\w*|budget|agenda|update|discuss\w*|said|say|how many|which|tasks?|due)\b",
+                    re.I)
 CORRECTION = re.compile(r"\b(actually|i mean|sorry|instead|rather|wait)\b", re.I)
 CANCEL = re.compile(r"\b(never ?mind|forget it|cancel that|scratch that|no worries)\b", re.I)
 pending: dict[tuple[int, str], dict] = {}  # (meeting, speaker) -> {"parts": [...], "task": Task}
+filler_until: dict[int, float] = {}         # meeting -> monotonic time the current filler finishes
 speaking_until: dict[int, float] = {}       # meeting -> monotonic time Amber's audio ends
 FOLLOWUP = float(os.getenv("AMBER_FOLLOWUP", "10"))  # seconds after a reply the asker can follow up
 followup: dict[int, tuple[str, float]] = {}  # meeting -> (last asker, follow-up window end)
@@ -276,8 +287,36 @@ def on_speech(mid: int, speaker: str, text: str, addressed: bool):
         q["task"].cancel()  # asker is still talking -> restart with the fuller question
     q = q or {"parts": []}
     q["parts"].append(text)
-    q["task"] = _spawn(_reply(mid, speaker, q, delay=DEBOUNCE, key=key))
+    delay = DEBOUNCE if has_content(" ".join(q["parts"])) else BARE_WAIT
+    q["task"] = _spawn(_reply(mid, speaker, q, delay=delay, key=key))
     pending[key] = q
+
+
+def has_content(text: str) -> bool:
+    """False for a bare "Amber" / "hey Amber": the actual question is probably still coming."""
+    words = re.sub(r"[^a-z' ]", " ", WAKE.sub(" ", text.lower())).split()
+    return any(w not in _NOISE for w in words)
+
+
+def filler_kind(question: str) -> str | None:
+    """Which filler pool fits, or None for greetings / questions about Amber herself."""
+    if not has_content(question) or NO_FILLER.search(question):
+        return None
+    return "lookup" if LOOKUP.search(question) else "think"
+
+
+async def _play_filler(mid: int, kind: str):
+    text = voice.pick_filler(kind)
+    publish("amber.filler", mid, {"text": text})
+    bot = _real_bot(mid)
+    if not bot or not os.getenv("ELEVENLABS_API_KEY"):
+        return
+    try:
+        mp3 = await voice.filler_mp3(text)
+        await recall.output_audio(bot, mp3)
+        filler_until[mid] = speaking_until[mid] = time.monotonic() + len(mp3) / 16000
+    except Exception as e:
+        print(f"[amber] filler failed: {e!r}")
 
 
 def _real_bot(mid: int) -> str | None:
@@ -299,6 +338,8 @@ async def _reply(mid: int, speaker: str, q: dict, delay: float, via_chat=False, 
     q["generating"] = True
     question = " ".join(q["parts"])
     t0 = time.perf_counter()
+    if not via_chat and not q.get("filler") and (kind := filler_kind(question)):
+        q["filler"] = _spawn(_play_filler(mid, kind))  # instant acknowledgement while we think
     try:
         text = await brain.answer(mid, speaker, question)
     except Exception as e:  # every model failed: say so instead of going silent
@@ -323,6 +364,9 @@ async def _reply(mid: int, speaker: str, q: dict, delay: float, via_chat=False, 
     else:
         db.execute("INSERT INTO utterances (meeting_id,speaker,text,ts,addressed) VALUES (?,?,?,?,0)",
                    mid, "Amber", text, None)
+        if q.get("filler"):
+            await q["filler"]  # never talk over our own "let me check"
+            await asyncio.sleep(max(0, filler_until.get(mid, 0) - FILLER_OVERLAP - time.monotonic()))
         if bot and mp3:
             await recall.output_audio(bot, mp3)
         if mp3:

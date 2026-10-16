@@ -17,7 +17,9 @@ CALL_TIMEOUT = float(os.getenv("GEMINI_TIMEOUT", "5"))  # an overloaded call oth
 
 # OpenAI-compatible endpoint (local proxy, OpenAI, Groq, LM Studio...). Used first when LLM_BASE_URL is set.
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").rstrip("/")  # include the /v1, e.g. http://localhost:8317/v1
-LLM_MODEL = os.getenv("LLM_MODEL", "")
+# Comma-separated, tried in order. "model@low" sets that model's reasoning_effort (overrides LLM_REASONING_EFFORT).
+# e.g. "gemma4:31b,gpt-6-luna@low,gemini-3.5-flash-lite"
+LLM_MODELS = [m.strip() for m in os.getenv("LLM_MODEL", "").split(",") if m.strip()]
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "10"))
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "300"))  # headroom for models that reason before answering
 LLM_REASONING_EFFORT = os.getenv("LLM_REASONING_EFFORT", "")  # none / low / medium / high; empty = model default
@@ -63,20 +65,22 @@ def build_context(mid: int, transcript_lines: int = 40) -> str:
             + "\n\nTRANSCRIPT (most recent last):\n" + "\n".join(f"{u['speaker']}: {u['text']}" for u in lines))
 
 
-async def chat_completion(system: str, prompt: str) -> str:
+async def chat_completion(model: str, system: str, prompt: str) -> str:
+    model, _, effort = model.partition("@")
+    effort = effort or LLM_REASONING_EFFORT
     global _http
     _http = _http or httpx.AsyncClient(timeout=LLM_TIMEOUT)  # kept alive: no TLS/TCP setup per reply
     r = await _http.post(
         f"{LLM_BASE_URL}/chat/completions",
         headers={"Authorization": f"Bearer {os.getenv('LLM_API_KEY', '')}"},
-        json={"model": LLM_MODEL, "temperature": 0.2, "max_tokens": LLM_MAX_TOKENS,
+        json={"model": model, "temperature": 0.2, "max_tokens": LLM_MAX_TOKENS,
               "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-              **({"reasoning_effort": LLM_REASONING_EFFORT} if LLM_REASONING_EFFORT else {})},
+              **({"reasoning_effort": effort} if effort else {})},
     )
     r.raise_for_status()
     choice = r.json()["choices"][0]
     if choice.get("finish_reason") == "length":
-        raise RuntimeError(f"{LLM_MODEL} hit the token cap, reply would be cut off")
+        raise RuntimeError(f"{model} hit the token cap, reply would be cut off")
     return (choice["message"].get("content") or "").strip()
 
 
@@ -95,7 +99,7 @@ def providers() -> list[tuple[str, callable]]:
     """Ordered fallbacks: the OpenAI-compatible endpoint first, then Gemini models."""
     out = []
     if LLM_BASE_URL:
-        out.append((f"openai:{LLM_MODEL}", chat_completion))
+        out += [(f"openai:{m}", lambda s, p, m=m: chat_completion(m, s, p)) for m in LLM_MODELS]
     if os.getenv("GEMINI_API_KEY"):
         out += [(f"gemini:{m}", lambda s, p, m=m: gemini(m, s, p)) for m in MODELS]
     return out

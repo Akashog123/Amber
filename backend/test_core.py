@@ -41,6 +41,7 @@ async def fake_answer(mid, speaker, question):
 
 brain.answer = fake_answer
 main.DEBOUNCE = 0.1
+main.BARE_WAIT = 0.5
 
 c = TestClient(main.app)
 c.__enter__()  # keep the app's event loop alive between requests so reply tasks run
@@ -96,6 +97,21 @@ time.sleep(0.15)
 say(d["bot_id"], "Priya", "actually I mean the cooling tower")
 time.sleep(0.6)
 assert asked[-1] == "Amber, who owns the boiler? actually I mean the cooling tower", asked
+# Fillers fit the question; greetings and questions about Amber herself get none.
+assert main.filler_kind("amber what's the status of the pump order") == "lookup"
+assert main.filler_kind("amber what is a vfd drive") == "think"
+assert main.filler_kind("amber are you there") is None
+assert main.filler_kind("amber who made you") is None
+assert main.filler_kind("hey amber") is None
+
+# Bare "Amber" then the question a moment later (seen live) -> one answer to the whole thing.
+asked.clear()
+say(d["bot_id"], "Priya", "amber")
+time.sleep(0.3)  # longer than DEBOUNCE, shorter than BARE_WAIT
+say(d["bot_id"], "Priya", "what's the status of the vfd drives")
+time.sleep(0.8)
+assert asked == ["amber what's the status of the vfd drives"], asked
+
 # Every model down -> Amber says sorry instead of going silent.
 async def broken_answer(mid, speaker, question):
     raise RuntimeError("503 UNAVAILABLE")
