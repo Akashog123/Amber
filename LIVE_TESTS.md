@@ -91,9 +91,22 @@ Expected answers come from the mock records in `backend/seed.py`.
 
 ---
 
+## J. Tasks and record notes (runs in the background every 4 lines and at the end)
+
+Check results with: `curl localhost:8000/api/meetings/<id>` (tasks) and `curl localhost:8000/api/records` (notes).
+
+| ID | Say / type | Pass if |
+|---|---|---|
+| J1 | "Rahul, can you send the vendor quote for the pump by Friday?" then (as Rahul, or you) "Yes, I'll send it by Friday." | One task: owner Rahul, due this Friday's date. Not two. |
+| J2 | "Priya, please place the PPE order by Wednesday." | Task for Priya, due Wednesday. |
+| J3 | "Chiller two vibrated badly again this morning." | Note on EQ-201, written without asking (only one chiller). |
+| J4 | "The Grundfos shipment is delayed to next month." | Amber asks in **chat**: "Did you mean 1) PO-10xx … or 2) PO-10xx …?" Nothing written yet. |
+| J5 | Reply in chat **"2"** (or say "Amber, the second one") | Chat: "Got it, noted on PO-…". Note appears on that record. |
+| J6 | Repeat J4, reply **"neither"** | "Okay, I won't update any record for that." No note written. |
+| J7 | "Rahul, I've sent the vendor quote already." | Rahul's task status changes (in progress / done), no new task. |
+
 ## Not built yet (don't test these today)
-Task extraction ("I'll do X by Friday"), writing notes onto records and the confirmation question,
-recap email, follow-up reminder emails, attendance in a recap, recordings dashboard.
+Recap email, follow-up reminder emails, attendance in a recap, recordings dashboard.
 
 ## Known issues from the first live runs
 - The transcriber sometimes mishears "Amber" ("i'm very", "hamburger"). Sound-alikes are matched only

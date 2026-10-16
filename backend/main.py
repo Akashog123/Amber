@@ -184,6 +184,8 @@ def _set_status(mid: int, status: str):
     db.execute(f"UPDATE meetings SET status=?{f', {col}=COALESCE({col}, ?)' if col else ''} WHERE id=?",
                *([status, db.now(), mid] if col else [status, mid]))
     publish("meeting.status", mid, {"status": status})
+    if status in ("done", "ended", "call_ended"):
+        _spawn(final_extract(mid))
 
 
 # --- Recall webhooks ---------------------------------------------------------
@@ -228,7 +230,10 @@ def handle_event(mid: int, event: str, data: dict):
                    mid, who, text, start, int(addressed))
         publish("transcript", mid, {"speaker": who, "text": text, "ts": start, "addressed": addressed})
         yield_floor(mid)
-        on_speech(mid, who, text, addressed)
+        # "Amber, the first one" / "PO-1046" may answer her confirmation question instead of asking a new one.
+        if not ((addressed or RECORD_ID.search(text)) and resolve_confirmation(mid, who, text)):
+            on_speech(mid, who, text, addressed)
+        maybe_extract(mid)
     elif event == "participant_events.join":
         db.execute("INSERT INTO participants (meeting_id,name,joined_at) VALUES (?,?,?)", mid, who, ts)
         publish("participant.join", mid, {"name": who, "at": ts})
@@ -240,6 +245,8 @@ def handle_event(mid: int, event: str, data: dict):
         text = (inner.get("data") or {}).get("text", "")
         db.execute("INSERT INTO chat (meeting_id,sender,text,ts,is_amber) VALUES (?,?,?,?,0)", mid, who, text, ts)
         publish("chat", mid, {"sender": who, "text": text, "at": ts, "addressed": is_addressed(text)})
+        if resolve_confirmation(mid, who, text):
+            return
         if is_addressed(text) and not CANCEL.search(text):
             _spawn(_reply(mid, who, {"parts": [text]}, delay=0, via_chat=True))
     elif event.startswith("bot."):
@@ -396,3 +403,149 @@ async def _reply(mid: int, speaker: str, q: dict, delay: float, via_chat=False, 
     print(f"[amber] {speaker}: {question!r} -> {text!r} {latency}")
     publish("amber.reply", mid, {"to": speaker, "question": question, "text": text,
                                  "via": "chat" if via_chat else "voice", "latency": latency})
+
+
+# --- task extraction + record tagging ------------------------------------------
+# Every few human lines (and once at the end) the new transcript goes through brain.extract().
+# Record notes are written only when the model is sure which record was meant; otherwise Amber asks in chat.
+AUTO_WRITE = float(os.getenv("AMBER_AUTO_WRITE", "0.8"))   # >= this: write the note straight away
+CONFIRM_MIN = float(os.getenv("AMBER_CONFIRM_MIN", "0.5"))  # >= this (and < AUTO_WRITE): ask first; below: ignore
+EXTRACT_EVERY = int(os.getenv("AMBER_EXTRACT_EVERY", "4"))  # new human lines between extraction passes
+RECORD_ID = re.compile(r"\b(PO|EQ)-?\s?(\d{3,4})\b", re.I)
+CHOICE_WORDS = {"1": 0, "one": 0, "first": 0, "2": 1, "two": 1, "second": 1, "3": 2, "three": 2, "third": 2}
+YES = re.compile(r"^\W*(amber\W+)?(yes|yeah|yep|correct|right|that one|exactly)\b", re.I)
+NO = re.compile(r"\b(neither|none of (them|those)|no,? (it'?s )?not|ignore (it|that)|skip (it|that))\b", re.I)
+# ponytail: in-memory progress; a restart re-reads the meeting (the LLM sees OPEN TASKS, and exact repeats are
+# skipped). Persist per-meeting offsets if restarts mid-meeting become common.
+extracted_upto: dict[int, int] = {}
+since_extract: dict[int, int] = {}
+extracting: set[int] = set()
+
+
+def maybe_extract(mid: int):
+    since_extract[mid] = since_extract.get(mid, 0) + 1
+    if mid not in extracting and since_extract[mid] >= EXTRACT_EVERY:
+        _spawn(run_extract(mid))
+
+
+async def run_extract(mid: int):
+    extracting.add(mid)
+    since_extract[mid] = 0
+    try:
+        result, extracted_upto[mid] = await brain.extract(mid, extracted_upto.get(mid, 0))
+        await apply_extraction(mid, result)
+    except Exception as e:
+        print(f"[extract] meeting {mid} failed: {e!r}")
+        publish("extract.error", mid, {"error": str(e)})
+    finally:
+        extracting.discard(mid)
+
+
+async def final_extract(mid: int):
+    for _ in range(150):  # let an in-flight pass finish (max ~30s), then sweep what's left
+        if mid not in extracting:
+            break
+        await asyncio.sleep(0.2)
+    await run_extract(mid)
+
+
+def _attendee_email(mid: int, name: str | None) -> str:
+    first = (name or "").split(" ")[0].lower()
+    for a in db.rows("SELECT name, email FROM attendees WHERE meeting_id=?", mid):
+        if a["name"].split(" ")[0].lower() == first:
+            return a["email"] or ""
+    return ""
+
+
+async def apply_extraction(mid: int, r: dict):
+    series = (db.row("SELECT series_id FROM meetings WHERE id=?", mid) or {}).get("series_id")
+    open_keys = {f"{(t['owner'] or '').lower()}|{t['title'].lower()}" for t in db.rows(
+        "SELECT owner, title FROM tasks WHERE status!='done' AND (series_id=? OR meeting_id=?)", series, mid)}
+    for t in r.get("tasks") or []:
+        key = f"{(t.get('owner') or '').lower()}|{(t.get('title') or '').lower()}"
+        if not t.get("title") or key in open_keys:
+            continue
+        open_keys.add(key)  # also dedupes repeats within this same pass
+        tid = db.execute("INSERT INTO tasks (meeting_id,series_id,title,owner,owner_email,due_at,status,last_update) "
+                         "VALUES (?,?,?,?,?,?,'open',?)", mid, series, t["title"], t.get("owner"),
+                         _attendee_email(mid, t.get("owner")), t.get("due"), t.get("quote"))
+        publish("task.created", mid, {"id": tid, **t})
+    for u in r.get("task_updates") or []:
+        if db.row("SELECT id FROM tasks WHERE id=?", u.get("task_id")):
+            db.execute("UPDATE tasks SET status=COALESCE(?, status), last_update=? WHERE id=?",
+                       u.get("status"), u.get("note") or u.get("quote"), u["task_id"])
+            publish("task.updated", mid, u)
+    records = {x["id"]: x for x in db.rows("SELECT id, name FROM records")}
+    for n in r.get("record_notes") or []:
+        conf = float(n.get("confidence") or 0)
+        rid = n.get("record_id")
+        cands = [c for c in dict.fromkeys([rid, *(n.get("candidates") or [])]) if c in records]
+        if conf >= AUTO_WRITE and rid in records and len(cands) == 1:
+            write_note(mid, rid, n, conf)
+        elif conf >= CONFIRM_MIN and cands:
+            await ask_which_record(mid, n, cands, records)
+
+
+def write_note(mid: int, rid: str, n: dict, conf: float):
+    db.execute("INSERT INTO record_notes (record_id,meeting_id,note,confidence,ts) VALUES (?,?,?,?,?)",
+               rid, mid, n.get("note"), conf, db.now())
+    if n.get("new_status"):
+        db.execute("UPDATE records SET status=? WHERE id=?", n["new_status"], rid)
+    publish("record.noted", mid, {"record_id": rid, "note": n.get("note"), "new_status": n.get("new_status"),
+                                  "confidence": conf})
+
+
+async def amber_chat(mid: int, text: str):
+    db.execute("INSERT INTO chat (meeting_id,sender,text,ts,is_amber) VALUES (?,?,?,?,1)", mid, "Amber", text, db.now())
+    publish("chat", mid, {"sender": "Amber", "text": text, "at": db.now(), "addressed": False})
+    if bot := _real_bot(mid):
+        try:
+            await recall.send_chat(bot, text)
+        except Exception as e:
+            print(f"[amber] chat send failed: {e!r}")
+
+
+async def ask_which_record(mid: int, n: dict, cands: list[str], records: dict):
+    """Confidence check: never guess which record to write to. Ask in chat (polite, doesn't interrupt)."""
+    quote = (n.get("quote") or n.get("note") or "").strip().rstrip(".")
+    if len(cands) > 1:
+        options = " or ".join(f"{i + 1}) {c} {records[c]['name']}" for i, c in enumerate(cands))
+        question = (f'Quick check before I update the records: "{quote}". Did you mean {options}? '
+                    "Reply with the number, or 'neither'.")
+    else:
+        question = (f'Quick check: should I note "{n.get("note")}" on {cands[0]} {records[cands[0]]["name"]}? '
+                    "Reply yes or no.")
+    db.execute("INSERT INTO pending_confirmations (meeting_id,question,candidates_json,created_at) VALUES (?,?,?,?)",
+               mid, question, json.dumps({"candidates": cands, "note": n}), db.now())
+    publish("confirmation.asked", mid, {"question": question, "candidates": cands})
+    await amber_chat(mid, question)
+
+
+def resolve_confirmation(mid: int, who: str, text: str) -> bool:
+    """Handle a reply to Amber's latest open question. True if `text` was that reply."""
+    pc = db.row("SELECT * FROM pending_confirmations WHERE meeting_id=? AND resolved=0 ORDER BY id DESC LIMIT 1", mid)
+    if not pc:
+        return False
+    data = json.loads(pc["candidates_json"])
+    cands, n = data["candidates"], data["note"]
+    words = re.sub(r"[^a-z0-9 ]", " ", WAKE.sub(" ", text.lower())).split()
+    chosen = None
+    if m := RECORD_ID.search(text):
+        rid = f"{m.group(1).upper()}-{m.group(2)}"
+        chosen = rid if rid in cands else None
+    if chosen is None and len(words) <= 6:  # "1", "the first one", "second": short replies only
+        idx = next((CHOICE_WORDS[w] for w in words if w in CHOICE_WORDS), None)
+        chosen = cands[idx] if idx is not None and idx < len(cands) else None
+    if chosen is None and len(cands) == 1 and YES.search(text):
+        chosen = cands[0]
+    declined = NO.search(text) or (len(cands) == 1 and re.match(r"^\W*no\b", text, re.I))
+    if chosen is None and not declined:
+        return False  # not an answer to the question
+    db.execute("UPDATE pending_confirmations SET resolved=1 WHERE id=?", pc["id"])
+    if chosen:
+        write_note(mid, chosen, n, 1.0)  # confirmed by a person
+        _spawn(amber_chat(mid, f"Got it, noted on {chosen}. Thanks, {who.split(' ')[0]}."))
+    else:
+        _spawn(amber_chat(mid, "Okay, I won't update any record for that."))
+    publish("confirmation.resolved", mid, {"chosen": chosen, "by": who})
+    return True

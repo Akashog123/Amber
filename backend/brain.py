@@ -1,7 +1,10 @@
 """LLM reasoning. Any OpenAI-compatible server (LLM_BASE_URL, e.g. a local proxy) and/or Gemini.
-Grounded answers now; extraction / tagging / MOM come next."""
+Grounded answers, task extraction and record tagging; MOM comes next."""
 import asyncio
+import json
 import os
+import re
+from datetime import datetime
 
 import httpx
 from google import genai
@@ -65,7 +68,7 @@ def build_context(mid: int, transcript_lines: int = 40) -> str:
             + "\n\nTRANSCRIPT (most recent last):\n" + "\n".join(f"{u['speaker']}: {u['text']}" for u in lines))
 
 
-async def chat_completion(model: str, system: str, prompt: str) -> str:
+async def chat_completion(model: str, system: str, prompt: str, max_tokens: int | None = None) -> str:
     model, _, effort = model.partition("@")
     effort = effort or LLM_REASONING_EFFORT
     global _http
@@ -73,7 +76,7 @@ async def chat_completion(model: str, system: str, prompt: str) -> str:
     r = await _http.post(
         f"{LLM_BASE_URL}/chat/completions",
         headers={"Authorization": f"Bearer {os.getenv('LLM_API_KEY', '')}"},
-        json={"model": model, "temperature": 0.2, "max_tokens": LLM_MAX_TOKENS,
+        json={"model": model, "temperature": 0.2, "max_tokens": max_tokens or LLM_MAX_TOKENS,
               "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
               **({"reasoning_effort": effort} if effort else {})},
     )
@@ -84,9 +87,9 @@ async def chat_completion(model: str, system: str, prompt: str) -> str:
     return (choice["message"].get("content") or "").strip()
 
 
-async def gemini(model: str, system: str, prompt: str) -> str:
+async def gemini(model: str, system: str, prompt: str, max_tokens: int | None = None) -> str:
     cfg = types.GenerateContentConfig(
-        system_instruction=system, max_output_tokens=120, temperature=0.2,
+        system_instruction=system, max_output_tokens=max_tokens or 120, temperature=0.2,
         thinking_config=types.ThinkingConfig(thinking_budget=0))  # thinking adds seconds of latency
     r = await asyncio.wait_for(
         client().aio.models.generate_content(model=model, contents=prompt, config=cfg), CALL_TIMEOUT)
@@ -99,17 +102,17 @@ def providers() -> list[tuple[str, callable]]:
     """Ordered fallbacks: the OpenAI-compatible endpoint first, then Gemini models."""
     out = []
     if LLM_BASE_URL:
-        out += [(f"openai:{m}", lambda s, p, m=m: chat_completion(m, s, p)) for m in LLM_MODELS]
+        out += [(f"openai:{m}", lambda s, p, t, m=m: chat_completion(m, s, p, t)) for m in LLM_MODELS]
     if os.getenv("GEMINI_API_KEY"):
-        out += [(f"gemini:{m}", lambda s, p, m=m: gemini(m, s, p)) for m in MODELS]
+        out += [(f"gemini:{m}", lambda s, p, t, m=m: gemini(m, s, p, t)) for m in MODELS]
     return out
 
 
-async def complete(system: str, prompt: str) -> str:
+async def complete(system: str, prompt: str, max_tokens: int | None = None) -> str:
     err: Exception = RuntimeError("no LLM configured: set LLM_BASE_URL or GEMINI_API_KEY")
     for name, call in providers():
         try:
-            return await call(system, prompt)
+            return await call(system, prompt, max_tokens)
         except Exception as e:  # 429 / 503 overload / timeout / truncation -> try the next one
             print(f"[brain] {name} failed: {type(e).__name__} {str(e)[:80]}")
             err = e
@@ -119,3 +122,52 @@ async def complete(system: str, prompt: str) -> str:
 async def answer(mid: int, speaker: str, question: str) -> str:
     prompt = f"{build_context(mid)}\n\n{speaker} asked Amber: {question}"
     return await complete(ANSWER_RULES, prompt) or FALLBACK
+
+
+EXTRACT_RULES = """You keep the action items and the record system up to date for a live work meeting.
+Read the NEW TRANSCRIPT lines and return ONLY a JSON object, no prose, no code fences:
+{"tasks": [{"title": "...", "owner": "person name", "due": "YYYY-MM-DD or null", "quote": "exact words"}],
+ "task_updates": [{"task_id": 3, "status": "open|in_progress|done|blocked", "note": "...", "quote": "..."}],
+ "record_notes": [{"record_id": "PO-1041", "note": "...", "new_status": "short status or null",
+                   "confidence": 0.0, "candidates": ["PO-1041"], "quote": "exact words"}]}
+Rules:
+- tasks: only explicit commitments or assignments ("I'll send the quote by Friday", "Priya, please close the
+  PPE order by Wednesday"). owner = the person who will do the work. Resolve relative dates against TODAY.
+  If a task already exists in OPEN TASKS, do not repeat it; report progress on it in task_updates instead.
+- record_notes: only when the discussion gives NEW information about a specific record (status change, delay,
+  issue, decision). Never restate what the record already says. confidence = how sure you are WHICH record
+  is meant. candidates = every record id that could fit. If more than one could fit (e.g. "the pump" with
+  several pump-related records), list them all and keep confidence at 0.7 or below.
+- new_status: only if the discussion clearly changes the record's status, else null.
+- Ignore questions asked to Amber and Amber's own lines. Use empty lists when nothing applies."""
+
+
+def _parse_json(text: str) -> dict:
+    """Models sometimes wrap JSON in fences or add a sentence; take the outermost object."""
+    m = re.search(r"\{.*\}", text, re.S)
+    return json.loads(m.group(0)) if m else {}
+
+
+async def extract(mid: int, after_id: int) -> tuple[dict, int]:
+    """Tasks, task updates and record notes from human lines with id > after_id. Returns (result, last id seen)."""
+    m = db.row("SELECT series_id FROM meetings WHERE id=?", mid) or {}
+    new = db.rows("SELECT id, speaker, text FROM utterances WHERE meeting_id=? AND id>? AND speaker!='Amber' "
+                  "ORDER BY id", mid, after_id)
+    if not new:
+        return {}, after_id
+    before = db.rows("SELECT speaker, text FROM utterances WHERE meeting_id=? AND id<=? AND speaker!='Amber' "
+                     "ORDER BY id DESC LIMIT 6", mid, after_id)[::-1]
+    records = db.rows("SELECT id, kind, name, aliases, status, owner FROM records ORDER BY id")
+    tasks = db.rows("SELECT id, title, owner, due_at, status FROM tasks WHERE status!='done' "
+                    "AND (series_id=? OR meeting_id=?)", m.get("series_id"), mid)
+    people = db.rows("SELECT name FROM attendees WHERE meeting_id=?", mid)
+    now = datetime.now().astimezone()
+    prompt = (
+        f"TODAY: {now:%A %Y-%m-%d}\nATTENDEES: {', '.join(p['name'] for p in people) or '-'}\n\nRECORDS:\n"
+        + "\n".join(f"- {r['id']} [{r['kind']}] {r['name']} (aka {r['aliases']}) | status: {r['status']} | "
+                    f"owner: {r['owner']}" for r in records)
+        + "\n\nOPEN TASKS:\n" + ("\n".join(f"- #{t['id']} {t['title']} (owner {t['owner']}, due {t['due_at']}, "
+                                          f"{t['status']})" for t in tasks) or "-")
+        + "\n\nEARLIER CONTEXT (already processed):\n" + ("\n".join(f"{u['speaker']}: {u['text']}" for u in before) or "-")
+        + "\n\nNEW TRANSCRIPT:\n" + "\n".join(f"{u['speaker']}: {u['text']}" for u in new))
+    return _parse_json(await complete(EXTRACT_RULES, prompt, max_tokens=1200)), new[-1]["id"]

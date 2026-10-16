@@ -14,6 +14,9 @@ RECORDS = [
      "Delivered", "Rahul", "Qty 4. Delivered 10 Oct, installation pending."),
     ("PO-1045", "procurement", "PPE kits", "safety kits, PPE",
      "Approved, not ordered", "Sneha", "Qty 50. Approved in last week's sync."),
+    # A second Grundfos pump: "the Grundfos pump" is genuinely ambiguous, so Amber has to confirm before writing.
+    ("PO-1046", "procurement", "Booster pump Grundfos CM-5", "booster pump, CM-5, Grundfos booster",
+     "Ordered, ETA 30 Oct", "Priya", "Qty 1. Pressure booster for the admin block. PO raised 8 Oct."),
     ("EQ-201", "equipment", "Chiller #2", "chiller, chiller two",
      "Running, high vibration flagged", "Ankit", "Carrier 30XA. Last serviced 12 Apr."),
     ("EQ-202", "equipment", "Boiler B1", "boiler",

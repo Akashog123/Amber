@@ -15,7 +15,9 @@ import time  # noqa: E402
 
 import brain  # noqa: E402
 import main  # noqa: E402
+import db  # noqa: E402
 import replay  # noqa: E402
+import seed  # noqa: E402
 
 assert main.is_addressed("Agreed. Amber, what's the status?")
 assert main.is_addressed("ember can you check")  # ASR mishearing
@@ -41,6 +43,12 @@ async def fake_answer(mid, speaker, question):
     return brain.FALLBACK if "marketing" in question else f"answer to {speaker}"
 
 brain.answer = fake_answer
+
+
+async def no_extract(mid, after_id):
+    return {}, after_id
+
+brain.extract = no_extract  # background passes would need a real LLM; apply_extraction is tested directly
 main.DEBOUNCE = 0.1
 main.BARE_WAIT = 0.5
 
@@ -72,7 +80,7 @@ assert {p["name"] for p in m["participants"]} == {"Akash", "Rahul", "Priya"}
 assert all(p["left_at"] for p in m["participants"])
 assert m["chat"][0]["sender"] == "Priya"
 assert len(m["attendees"]) == 3
-assert len(c.get("/api/records").json()) == 9
+assert len(c.get("/api/records").json()) == len(seed.RECORDS)
 # Speaker rephrases before the debounce fires -> one answer built from the whole question.
 d = c.post("/api/meetings/dispatch", json={"title": "t", "url": "https://meet.google.com/x", "replay": True}).json()
 asked.clear()
@@ -133,6 +141,62 @@ for _ in range(4):  # 4 x 0.2s of partials = 0.8s, longer than BARE_WAIT (0.5s)
 say(d["bot_id"], "Akash", "what's the status of Chiller two?")
 time.sleep(0.8)
 assert asked == ["Amber, what's the status of Chiller two?"], asked
+
+# --- Task extraction + record tagging with the confidence check (LLM output stubbed) ---
+e = c.post("/api/meetings/dispatch", json={"title": "x", "url": "https://meet.google.com/y", "replay": True,
+                                           "attendees": [{"name": "Rahul Mehta", "email": "rahul@example.com"},
+                                                         {"name": "Priya", "email": "priya@example.com"}]}).json()
+E = e["id"]
+pump_note = {"record_id": "PO-1041", "note": "Delivery slipped two weeks", "confidence": 0.6,
+             "candidates": ["PO-1041", "PO-1046"], "quote": "the Grundfos pump slipped two weeks"}
+asyncio.run(main.apply_extraction(E, {
+    "tasks": [{"title": "Send vendor quote", "owner": "Rahul", "due": "2026-10-23", "quote": "I'll send it by Friday"},
+              {"title": "Send vendor quote", "owner": "Rahul", "due": "2026-10-23", "quote": "dup in same pass"}],
+    "record_notes": [
+        {"record_id": "PO-1043", "note": "Renewal approved", "new_status": "Renewal approved", "confidence": 0.95,
+         "candidates": ["PO-1043"], "quote": "we approved the renewal"},
+        pump_note,
+        {"record_id": "EQ-204", "note": "maybe noisy", "confidence": 0.3, "candidates": ["EQ-204"]},
+        {"record_id": "PO-9999", "note": "made-up record", "confidence": 0.99, "candidates": ["PO-9999"]}]}))
+m = c.get(f"/api/meetings/{E}").json()
+assert [(t["owner"], t["owner_email"], t["due_at"]) for t in m["tasks"]] == [("Rahul", "rahul@example.com", "2026-10-23")]
+recs = {r["id"]: r for r in c.get("/api/records").json()}
+assert recs["PO-1043"]["status"] == "Renewal approved" and recs["PO-1043"]["notes"][-1]["note"] == "Renewal approved"
+assert not [n for n in recs["PO-1041"]["notes"] + recs["PO-1046"]["notes"] if n["meeting_id"] == E]  # asked, not written
+assert not recs["EQ-204"]["notes"]  # low confidence ignored
+asked_q = [x["text"] for x in m["chat"] if x["is_amber"]][-1]
+assert "1) PO-1041" in asked_q and "2) PO-1046" in asked_q, asked_q
+
+# Reply "2" in chat -> note lands on PO-1046 and Amber confirms.
+c.post("/webhooks/recall?token=t", json=replay.payload(e["bot_id"], 0, "chat", "Priya", "2")).raise_for_status()
+time.sleep(0.2)
+recs = {r["id"]: r for r in c.get("/api/records").json()}
+assert [n["note"] for n in recs["PO-1046"]["notes"] if n["meeting_id"] == E] == ["Delivery slipped two weeks"]
+assert "noted on PO-1046" in [x["text"] for x in c.get(f"/api/meetings/{E}").json()["chat"] if x["is_amber"]][-1]
+
+# Voice: "Amber, the first one" answers the question instead of being treated as a new question.
+asyncio.run(main.apply_extraction(E, {"record_notes": [pump_note]}))
+asked.clear()
+say(e["bot_id"], "Priya", "Amber, the first one")
+time.sleep(0.4)
+assert asked == [], asked  # not sent to the answer path
+recs = {r["id"]: r for r in c.get("/api/records").json()}
+assert [n["note"] for n in recs["PO-1041"]["notes"] if n["meeting_id"] == E] == ["Delivery slipped two weeks"]
+
+# "neither" -> nothing written; unrelated chat while a question is open is not swallowed.
+asyncio.run(main.apply_extraction(E, {"record_notes": [pump_note]}))
+assert not main.resolve_confirmation(E, "Priya", "what time is lunch?")
+c.post("/webhooks/recall?token=t", json=replay.payload(e["bot_id"], 0, "chat", "Priya", "neither")).raise_for_status()
+time.sleep(0.2)
+assert db.row("SELECT COUNT(*) n FROM pending_confirmations WHERE meeting_id=? AND resolved=0", E)["n"] == 0
+assert len([n for n in db.rows("SELECT * FROM record_notes WHERE meeting_id=?", E)]) == 3  # PO-1043, 1046, 1041
+
+# Progress on an existing task updates it instead of adding a new one.
+tid = m["tasks"][0]["id"]
+asyncio.run(main.apply_extraction(E, {"task_updates": [{"task_id": tid, "status": "done", "note": "quote sent"}],
+                                      "tasks": [{"title": "Send vendor quote", "owner": "Rahul"}]}))
+t = c.get(f"/api/meetings/{E}").json()["tasks"]
+assert len(t) == 1 and t[0]["status"] == "done" and t[0]["last_update"] == "quote sent", t
 
 # Every model down -> Amber says sorry instead of going silent.
 async def broken_answer(mid, speaker, question):

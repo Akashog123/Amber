@@ -36,10 +36,14 @@ SCRIPT = [
     (45, "say", "Akash", "Priya, please close the PPE kit order by next Wednesday."),
     (49, "say", "Priya", "Sure, I'll place the PPE order by Wednesday."),
     (53, "say", "Akash", "We still haven't decided whether to replace or repair the compressor. Let's take that next week."),
-    (58, "leave", "Rahul", None),
-    (59, "leave", "Priya", None),
-    (60, "leave", "Akash", None),
-    (61, "bot", None, "done"),
+    # Ambiguous on purpose: two Grundfos pump orders exist (PO-1041, PO-1046), so Amber asks in chat first.
+    (55, "say", "Rahul", "One more thing, the Grundfos shipment is delayed to next month."),
+    (57, "say", "Akash", "Okay, noted. Let's wrap up."),
+    (66, "chat", "Rahul", "2"),
+    (68, "leave", "Rahul", None),
+    (69, "leave", "Priya", None),
+    (70, "leave", "Akash", None),
+    (71, "bot", None, "done"),
 ]
 
 PIDS = {name: i + 100 for i, name in enumerate(a["name"] for a in ATTENDEES)}
