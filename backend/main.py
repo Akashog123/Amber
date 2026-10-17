@@ -309,7 +309,7 @@ def forget(mid: int):
     for q in (convs.pop(mid, None) or Conversation()).pending.values():
         if q.get("task"):
             q["task"].cancel()
-    for d in (filler_until, speaking_until, since_extract, screens, voice_locks):
+    for d in (filler_until, last_filler, speaking_until, since_extract, screens, voice_locks):
         d.pop(mid, None)
 
 
@@ -441,6 +441,12 @@ def handle_event(mid: int, event: str, data: dict):
 DEBOUNCE = float(os.getenv("AMBER_DEBOUNCE", "0.7"))
 BARE_WAIT = float(os.getenv("AMBER_BARE_WAIT", "2.0"))  # just "Amber" so far: wait longer for the question
 FILLER_OVERLAP = float(os.getenv("AMBER_FILLER_OVERLAP", "0.3"))  # start the answer this early (Recall lag)
+# A filler only covers a real wait: it plays if the answer isn't ready this many seconds after generation started
+# (live, "Let me check." before every 1-2 s answer made each reply slower and robotic), and at most once per
+# FILLER_GAP seconds, so a quick back-and-forth never hears "let me check" every turn.
+FILLER_AFTER = float(os.getenv("AMBER_FILLER_AFTER", "1.2"))
+FILLER_GAP = float(os.getenv("AMBER_FILLER_GAP", "15"))
+last_filler: dict[int, float] = {}  # meeting -> monotonic time of her last filler
 NO_FILLER = re.compile(r"\b(are you there|you there|can you hear me|hear me|audible|how are you|thank|thanks|"
                        r"good morning|who are you|who made you|who built you|what are you)\b", re.I)
 LOOKUP = re.compile(r"\b(status|orders?|ordered|owns?|owner|who|when|where|records?|po|deliver\w*|inspection|"
@@ -563,12 +569,24 @@ def still_talking(mid: int, speaker: str):
         q["task"] = _spawn(_reply(mid, speaker, q, delay=delay, key=speaker))
 
 
-def filler_kind(question: str) -> str | None:
-    """Which filler pool fits, or None for greetings / questions about Amber herself."""
-    if not has_content(question) or NO_FILLER.search(question):
+def filler_kind(question: str, mid: int | None = None) -> str | None:
+    """Which filler pool fits a slow answer, or None when a filler would sound wrong: Hindi (English-only pool),
+    greetings / questions about Amber, a bare "Amber", a two-word follow-up ("that right?", "really?"), a recording
+    command, or a short reply while her own record question is open ("the second one")."""
+    words = re.sub(r"[^a-z' ]", " ", WAKE.sub(" ", question.lower())).split()
+    if not has_content(question) or NO_FILLER.search(question) or HINDI.search(question) or RECORD_CMD.search(question):
         return None
-    kind = "lookup" if LOOKUP.search(question) else "think"
-    return kind + "_hi" if HINDI.search(question) else kind
+    if len(words) <= 3 and not LOOKUP.search(question):
+        return None
+    if mid is not None and len(words) <= 8 and open_confirmation(mid):
+        return None
+    return "lookup" if LOOKUP.search(question) else "think"
+
+
+def filler_ok(mid: int) -> bool:
+    """Right now, may she say "one moment"? Not if someone has started talking (never talk over people), and not
+    if she said one in the last FILLER_GAP seconds."""
+    return not conv(mid).talking_since and time.monotonic() - last_filler.get(mid, -1e9) >= FILLER_GAP
 
 
 def screen_for(mid: int, question: str) -> bytes | None:
@@ -797,10 +815,17 @@ async def _answer(mid: int, speaker: str, q: dict, delay: float, via_chat: bool)
     q["generating"] = True
     question = " ".join(q["parts"])
     t0 = time.perf_counter()
-    if not via_chat and not q.get("filler") and (kind := filler_kind(question)):
-        q["filler"] = _spawn(_play_filler(mid, kind))  # instant acknowledgement while we think
+    answer = asyncio.ensure_future(brain.answer(mid, speaker, question, screen_for(mid, question)))
     try:
-        text = await brain.answer(mid, speaker, question, screen_for(mid, question))
+        if not via_chat and not q.get("filler") and (kind := filler_kind(question, mid)):
+            done, _ = await asyncio.wait({answer}, timeout=FILLER_AFTER)
+            if not done and filler_ok(mid):  # slow answer: cover the wait
+                last_filler[mid] = time.monotonic()
+                q["filler"] = _spawn(_play_filler(mid, kind))
+        text = await answer
+    except asyncio.CancelledError:  # they kept talking / withdrew it: drop the half-made answer too
+        answer.cancel()
+        raise
     except Exception as e:  # every model failed: say so instead of going silent
         print(f"[amber] reply failed: {e!r}")
         publish("amber.error", mid, {"question": question, "error": str(e)})

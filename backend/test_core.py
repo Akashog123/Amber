@@ -57,6 +57,7 @@ async def no_extract(mid, after_id):
 brain.extract = no_extract  # background passes would need a real LLM; apply_extraction is tested directly
 main.DEBOUNCE = 0.1
 main.BARE_WAIT = 0.5
+main.FILLER_AFTER, main.FILLER_GAP = 0.05, 0  # fake answers take 0.15 s: "slow", so fillers still play here
 
 c = TestClient(main.app)
 c.__enter__()  # keep the app's event loop alive between requests so reply tasks run
@@ -128,6 +129,9 @@ assert main.filler_kind("amber what is a vfd drive") == "think"
 assert main.filler_kind("amber are you there") is None
 assert main.filler_kind("amber who made you") is None
 assert main.filler_kind("hey amber") is None
+assert main.filler_kind("That right?") is None and main.filler_kind("Amber, really?") is None  # quick follow-ups
+assert main.filler_kind("Amber, please stop the recording") is None
+assert main.filler_kind("And when does the seal arrive?") == "lookup"  # short but a lookup
 
 # Bare "Amber" then the question a moment later (seen live) -> one answer to the whole thing.
 asked.clear()
@@ -625,13 +629,35 @@ assert db.row("SELECT COUNT(*) n FROM record_notes")["n"] == before and main.ope
 c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "Akash", "neither")).raise_for_status()
 time.sleep(0.2)
 
-# Hindi: questions get Hindi fillers, follow-ups in Hindi count, the fixed lines are said in Hindi.
+# Fillers only cover a real wait: a fast answer gets none, a slow one gets one, and not again within FILLER_GAP.
+def answer_in(secs):
+    return lambda *a, **k: asyncio.sleep(secs, "answer")
+
+
+main.FILLER_AFTER, main.FILLER_GAP = 0.3, 0
+main.last_filler.pop(D, None)
+brain.answer = answer_in(0.05)
+say(d["bot_id"], "Akash", "Amber, what's the status of the boiler order?")
+time.sleep(0.8)
+assert D not in main.last_filler  # answered before a filler was due
+brain.answer = answer_in(0.6)
+say(d["bot_id"], "Akash", "Amber, who owns the chiller service contract?")
+time.sleep(1.2)
+first = main.last_filler[D]
+main.FILLER_GAP = 100
+say(d["bot_id"], "Akash", "Amber, when does the PPE kit order arrive?")
+time.sleep(1.2)
+assert main.last_filler[D] == first  # no second "let me check" in a quick back-and-forth
+main.FILLER_AFTER, main.FILLER_GAP = 0.05, 0
+brain.answer = fake_answer
+
+# Hindi: no fillers (English-only pool), follow-ups in Hindi count, the fixed lines are said in Hindi.
 brain.answer = lambda *a, **k: asyncio.sleep(0, brain.FALLBACK)
 say(d["bot_id"], "Priya", "Amber, marketing ka budget kitna hai?")
 time.sleep(0.4)
 assert replies(D)[0][-1] == brain.FALLBACK_HI
 brain.answer = fake_answer
-assert main.filler_kind("Amber, PO-1041 ka status kya hai?") == "lookup_hi"
+assert main.filler_kind("Amber, PO-1041 ka status kya hai?") is None and main.filler_kind("अंबर, पंप कब आएगा?") is None
 assert main.is_addressed("अंबर, पंप का ऑर्डर कब आएगा?")
 
 # Long-term series memory: the next meeting of a series sees what the last one decided.

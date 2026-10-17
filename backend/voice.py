@@ -13,13 +13,12 @@ MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_turbo_v2_5")
 # Fillers are synthesized once and cached, so they can use a slower, more natural model.
 FILLER_MODEL = os.getenv("ELEVENLABS_FILLER_MODEL") or MODEL
 FILLER_DIR = Path(__file__).parent / "assets" / "fillers"
-# Short acknowledgements played the moment Amber is asked something, while the answer is generated.
+# Short acknowledgements, played only when an answer is slow (main.filler_kind / FILLER_AFTER decide). English only:
+# a Hindi filler followed by a reply in the other language, or a stock Hindi phrase, sounded wrong live.
+# Neutral on purpose: no "good question" (the line may be a statement, or garbled), nothing that promises a result.
 FILLERS = {
-    "lookup": ["Let me check.", "One sec, pulling that up.", "Let me look that up.", "Checking the records.",
-               "Give me a second.", "Sure, let me see."],
-    "think": ["Hmm, good question.", "Let me think.", "Sure, one moment.", "Right, let me see.", "Okay, let me think."],
-    "lookup_hi": ["एक सेकंड, देखती हूँ।", "हाँ, चेक करती हूँ।", "रुकिए, रिकॉर्ड देखती हूँ।"],
-    "think_hi": ["हम्म, अच्छा सवाल है।", "एक मिनट, सोचती हूँ।", "हाँ, देखते हैं।"],
+    "lookup": ["Let me check.", "One moment, checking.", "Let me look that up.", "Checking the records."],
+    "think": ["One moment.", "Let me think.", "Give me a second."],
 }
 # One kept-alive client: a fresh TLS connection per reply cost ~1.4s in testing.
 _client: httpx.AsyncClient | None = None

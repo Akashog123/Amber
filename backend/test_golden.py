@@ -97,7 +97,7 @@ def replay(events: list[dict], extract_script: list[dict] = (), real_classifier:
     voice.tts = lambda text, model=None: asyncio.sleep(0, silence(REPLY_AUDIO))
     voice.filler_mp3 = lambda text: asyncio.sleep(0, silence(FILLER_AUDIO))
     voice.warm_fillers = lambda *a: asyncio.sleep(0)
-    for name in ("DEBOUNCE", "BARE_WAIT", "FOLLOWUP"):
+    for name in ("DEBOUNCE", "BARE_WAIT", "FOLLOWUP", "FILLER_AFTER", "FILLER_GAP"):
         setattr(main, name, getattr(main, name) / SPEED)
     with TestClient(main.app) as c:
         bot = c.post("/api/meetings/dispatch", json={"title": "golden", "url": "https://meet.google.com/g",
@@ -117,7 +117,7 @@ def replay(events: list[dict], extract_script: list[dict] = (), real_classifier:
             c.post("/webhooks/recall?token=t", json=e).raise_for_status()
         time.sleep((ANSWER_SEC + main.BARE_WAIT * SPEED + 1) / SPEED + 0.5)
         mid = db.row("SELECT id FROM meetings WHERE bot_id=?", bot)["id"]
-    for name in ("DEBOUNCE", "BARE_WAIT", "FOLLOWUP"):
+    for name in ("DEBOUNCE", "BARE_WAIT", "FOLLOWUP", "FILLER_AFTER", "FILLER_GAP"):
         setattr(main, name, getattr(main, name) * SPEED)
     confirmed = [n["record_id"] for n in db.rows(
         "SELECT record_id FROM record_notes WHERE meeting_id=? AND confidence=1.0 ORDER BY id", mid)]
