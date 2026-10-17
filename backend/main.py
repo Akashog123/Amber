@@ -71,21 +71,7 @@ def publish(type_: str, meeting_id: int | None, data: dict):
 
 QUESTION = re.compile(r"\b(can you|could you|would you|tell me|what|what's|who|whose|when|where|how|which|"
                       r"why|is there|are there|do we|did we|status|update|please|give me|check)\b", re.I)
-_SOUNDEX = {**dict.fromkeys("bfpv", "1"), **dict.fromkeys("cgjkqsxz", "2"), **dict.fromkeys("dt", "3"),
-            "l": "4", **dict.fromkeys("mn", "5"), "r": "6"}
-
-
-def _soundex_tail(word: str) -> str:
-    """Soundex digits after the first letter ("amber" -> "516"; v sounds like b, so "i'm very" -> "516")."""
-    out, prev = "", _SOUNDEX.get(word[0], "")
-    for ch in word[1:]:
-        code = _SOUNDEX.get(ch, "")
-        if code and code != prev:
-            out += code
-        if ch not in "hw":
-            prev = code
-    return out[:3]
-
+_soundex_tail = brain.soundex_tail  # "amber" -> "516"; v sounds like b, so "i'm very" -> "516"
 
 def is_addressed(text: str) -> bool:
     if WAKE.search(text):

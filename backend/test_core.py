@@ -47,6 +47,7 @@ async def fake_answer(mid, speaker, question, screen_png=None):
     await asyncio.sleep(0.15)  # answer is "in flight" for a moment, like the real API
     return brain.FALLBACK if "marketing" in question else f"answer to {speaker}"
 
+real_answer, real_complete = brain.answer, brain.complete
 brain.answer = fake_answer
 
 
@@ -434,6 +435,20 @@ c.post("/webhooks/recall?token=t", json=dup).raise_for_status()
 c.post("/webhooks/recall?token=t", json=dup).raise_for_status()
 time.sleep(0.5)
 assert asked == ["Amber, who owns the boiler?"], asked
+
+# Misheard record names are matched by sound in code and handed to the model as a hint, so it never guesses.
+assert brain.sounds_like_records("When are the pump sales arriving?") == [("PO-1042", "pump seals", "pump sales")]
+assert brain.sounds_like_records("is the cooling tour fixed") == [("EQ-203", "cooling tower", "cooling tour")]
+assert brain.sounds_like_records("what about the pump seals") == []  # heard right: no hint
+assert brain.sounds_like_records("how is the boiler doing") == []
+prompts = []
+brain.complete = lambda system, prompt, **k: (prompts.append(prompt), asyncio.sleep(0, "ok"))[1]
+asyncio.run(real_answer(D, "Akash", "When are the pump sales arriving?"))
+assert prompts[-1].endswith('HEARD-AS: "pump sales" was probably "pump seals" (PO-1042).'), prompts[-1][-120:]
+# Amber's own earlier lines are labelled in her context (unlabelled, the model imitated an earlier bad answer).
+db.execute("INSERT INTO utterances (meeting_id,speaker,text,ts,addressed) VALUES (?,?,?,NULL,0)", D, "Amber", "Earlier.")
+assert "Amber (your earlier reply): Earlier." in brain.build_context(D)
+brain.complete = real_complete
 
 # Cancel + new question in one breath (seen live): the old one is dropped, the new one answered.
 asked.clear()
