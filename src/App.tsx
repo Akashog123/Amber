@@ -16,48 +16,30 @@ import type { ScheduledMeet } from "./types"
 import {
   ArrowLeft,
   ArrowRight,
-  BriefcaseBusiness,
   CalendarDays,
   Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock3,
-  Code2,
   FileText,
   FileCheck2,
   ExternalLink,
-  Link2,
   ListChecks,
   Maximize2,
   Menu,
   MessageSquareText,
   Minimize2,
-  MoreHorizontal,
-  Palette,
   PencilLine,
   Plus,
   Save,
   Settings,
   Trash2,
   Upload,
-  UserRound,
   UsersRound,
   Video,
   X,
 } from "lucide-react"
-
-const meetingTypes = [
-  { name: "Physical AI Meet", icon: UsersRound },
-  { name: "Documentation Meet", icon: FileText },
-  { name: "Developer Meet", icon: Code2 },
-  { name: "Design Review", icon: Palette },
-  { name: "Product Meeting", icon: ListChecks },
-  { name: "Client Meeting", icon: UserRound },
-  { name: "Team Sync", icon: UsersRound },
-  { name: "Interview / Hiring", icon: BriefcaseBusiness },
-  { name: "Custom", icon: MoreHorizontal },
-]
 
 const getToday = () => {
   const now = new Date()
@@ -132,19 +114,6 @@ type UserProfile = {
   timezone: string
   defaultWorkspaceId: string
   emailSummaries: boolean
-}
-
-type NewMeetDraft = {
-  title: string
-  company: string
-  context: string
-  timing: "today" | "schedule" | "recurring"
-  startDate: string
-  time: string
-  timezone: string
-  duration: string
-  frequency: "daily" | "weekdays" | "weekly" | "monthly"
-  occurrences: number
 }
 
 const initialWorkspaces: Workspace[] = []
@@ -915,416 +884,6 @@ function Sidebar({
   )
 }
 
-function NewMeetModal({
-  onClose,
-  onSave,
-}: {
-  onClose: () => void
-  onSave: (draft: NewMeetDraft) => void
-}) {
-  const fileInput = useRef<HTMLInputElement>(null)
-  const [meetName, setMeetName] = useState("")
-  const [companyName, setCompanyName] = useState("")
-  const [timing, setTiming] = useState<NewMeetDraft["timing"]>("today")
-  const [startDate, setStartDate] = useState(dateKey(addDays(getToday(), 1)))
-  const [time, setTime] = useState("09:00")
-  const detectedTimezone =
-    Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
-  const [timezone, setTimezone] = useState(detectedTimezone)
-  const [duration, setDuration] = useState("30")
-  const [frequency, setFrequency] =
-    useState<NewMeetDraft["frequency"]>("weekly")
-  const [occurrences, setOccurrences] = useState(8)
-  const [smartSchedule, setSmartSchedule] = useState("")
-  const [context, setContext] = useState("")
-  const [contextMode, setContextMode] = useState<"write" | "upload">("write")
-  const [fileName, setFileName] = useState("")
-  const [dragging, setDragging] = useState(false)
-
-  const saveMeeting = () => {
-    onSave({
-      title: meetName.trim(),
-      company: companyName.trim(),
-      context,
-      timing,
-      startDate,
-      time,
-      timezone,
-      duration,
-      frequency,
-      occurrences,
-    })
-    onClose()
-  }
-
-  const applySmartSchedule = () => {
-    const value = smartSchedule.toLowerCase()
-    if (value.includes("weekday")) {
-      setTiming("recurring")
-      setFrequency("weekdays")
-    } else if (value.includes("daily") || value.includes("every day")) {
-      setTiming("recurring")
-      setFrequency("daily")
-    } else if (value.includes("monthly")) {
-      setTiming("recurring")
-      setFrequency("monthly")
-    } else if (value.includes("weekly") || value.includes("every ")) {
-      setTiming("recurring")
-      setFrequency("weekly")
-    } else {
-      setTiming("schedule")
-    }
-
-    if (value.includes("tomorrow"))
-      setStartDate(dateKey(addDays(getToday(), 1)))
-    const timeMatch = value.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/)
-    if (timeMatch) {
-      let hour = Number(timeMatch[1])
-      if (timeMatch[3] === "pm" && hour < 12) hour += 12
-      if (timeMatch[3] === "am" && hour === 12) hour = 0
-      setTime(`${String(hour).padStart(2, "0")}:${timeMatch[2] ?? "00"}`)
-    }
-  }
-
-  const frequencyLabel = {
-    daily: "Every day",
-    weekdays: "Every weekday",
-    weekly: "Every week",
-    monthly: "Every month",
-  }[frequency]
-  const scheduleSummary =
-    timing === "today"
-      ? `Today at ${new Date(`2026-01-01T${time}`).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`
-      : timing === "schedule"
-        ? `${new Date(`${startDate}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} at ${new Date(`2026-01-01T${time}`).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`
-        : `${frequencyLabel} at ${new Date(`2026-01-01T${time}`).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })} · ${occurrences} meetings`
-
-  return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-[#111b3c]/55 px-4 py-8 backdrop-blur-[2px]"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-    >
-      <div
-        className="flex max-h-[86vh] w-full max-w-[680px] flex-col overflow-hidden rounded-[24px] bg-white shadow-[0_28px_90px_rgba(12,26,58,0.3)]"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="new-meet-title"
-      >
-        <div className="overflow-y-auto px-6 pb-6 pt-7 sm:px-8">
-          <div className="flex items-start justify-between gap-5">
-            <div>
-              <h2
-                id="new-meet-title"
-                className="text-2xl font-extrabold tracking-[-0.03em] text-[#111b3c] sm:text-3xl"
-              >
-                Create a New Meet
-              </h2>
-              <p className="mt-1.5 text-sm text-[#6a7690]">
-                Add a name and any useful context.
-              </p>
-            </div>
-            <button
-              className="rounded-full p-2 text-[#273451] transition hover:bg-[#f0f4fa]"
-              type="button"
-              onClick={onClose}
-              aria-label="Close new meeting dialog"
-            >
-              <X className="h-6 w-6" />
-            </button>
-          </div>
-
-          <div className="mt-6 space-y-5">
-            <div>
-              <label
-                className="font-bold text-[#17213e]"
-                htmlFor="new-meet-name"
-              >
-                Meet name
-              </label>
-              <div className="mt-2 rounded-xl border border-[#cbd6e6] px-4 py-3.5 focus-within:border-[#3479f5] focus-within:ring-4 focus-within:ring-[#3479f5]/10">
-                <input
-                  id="new-meet-name"
-                  className="w-full bg-transparent outline-none placeholder:text-[#8792a8]"
-                  value={meetName}
-                  onChange={(event) => setMeetName(event.target.value)}
-                  placeholder="e.g. Weekly product sync"
-                  autoFocus
-                />
-              </div>
-            </div>
-
-            <div>
-              <label
-                className="font-bold text-[#17213e]"
-                htmlFor="company-name"
-              >
-                Company name
-              </label>
-              <div className="mt-2 rounded-xl border border-[#cbd6e6] px-4 py-3.5 focus-within:border-[#3479f5] focus-within:ring-4 focus-within:ring-[#3479f5]/10">
-                <input
-                  id="company-name"
-                  className="w-full bg-transparent outline-none placeholder:text-[#8792a8]"
-                  value={companyName}
-                  onChange={(event) => setCompanyName(event.target.value)}
-                  placeholder="e.g. Acme Inc."
-                />
-              </div>
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between gap-4">
-                <span className="font-bold text-[#17213e]">When</span>
-                <div className="flex rounded-full bg-[#eef2f8] p-1 text-xs font-semibold">
-                  {(["today", "schedule", "recurring"] as const).map(
-                    (option) => (
-                      <button
-                        key={option}
-                        className={`rounded-full px-3 py-1.5 capitalize transition ${
-                          timing === option
-                            ? "bg-white text-[#3479f5] shadow-sm"
-                            : "text-[#68758f]"
-                        }`}
-                        type="button"
-                        onClick={() => setTiming(option)}
-                      >
-                        {option}
-                      </button>
-                    ),
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-3 flex gap-2">
-                <input
-                  className="min-w-0 flex-1 rounded-xl border border-[#cbd6e6] px-4 py-3 outline-none placeholder:text-[#8792a8] focus:border-[#3479f5] focus:ring-4 focus:ring-[#3479f5]/10"
-                  value={smartSchedule}
-                  onChange={(event) => setSmartSchedule(event.target.value)}
-                  placeholder='Try "every weekday at 9 AM"'
-                />
-                <button
-                  className="rounded-xl border border-[#c7d3e6] px-4 text-sm font-bold text-[#3479f5] disabled:opacity-40"
-                  type="button"
-                  onClick={applySmartSchedule}
-                  disabled={!smartSchedule.trim()}
-                >
-                  Apply
-                </button>
-              </div>
-
-              <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                {timing !== "today" && (
-                  <input
-                    className="col-span-2 rounded-xl border border-[#cbd6e6] px-3 py-3 outline-none focus:border-[#3479f5]"
-                    type="date"
-                    min={dateKey(getToday())}
-                    value={startDate}
-                    onChange={(event) => setStartDate(event.target.value)}
-                    aria-label="Start date"
-                  />
-                )}
-                <input
-                  className="rounded-xl border border-[#cbd6e6] px-3 py-3 outline-none focus:border-[#3479f5]"
-                  type="time"
-                  value={time}
-                  onChange={(event) => setTime(event.target.value)}
-                  aria-label="Meeting time"
-                />
-                <select
-                  className="rounded-xl border border-[#cbd6e6] bg-white px-3 py-3 outline-none focus:border-[#3479f5]"
-                  value={duration}
-                  onChange={(event) => setDuration(event.target.value)}
-                  aria-label="Duration"
-                >
-                  <option value="15">15 min</option>
-                  <option value="30">30 min</option>
-                  <option value="45">45 min</option>
-                  <option value="60">1 hour</option>
-                </select>
-                {timing === "recurring" && (
-                  <>
-                    <select
-                      className="rounded-xl border border-[#cbd6e6] bg-white px-3 py-3 outline-none focus:border-[#3479f5]"
-                      value={frequency}
-                      onChange={(event) =>
-                        setFrequency(
-                          event.target.value as NewMeetDraft["frequency"],
-                        )
-                      }
-                      aria-label="Frequency"
-                    >
-                      <option value="daily">Daily</option>
-                      <option value="weekdays">Weekdays</option>
-                      <option value="weekly">Weekly</option>
-                      <option value="monthly">Monthly</option>
-                    </select>
-                    <label className="flex items-center rounded-xl border border-[#cbd6e6] px-3 text-sm text-[#68758f]">
-                      <input
-                        className="mr-2 w-12 bg-transparent outline-none"
-                        type="number"
-                        min="2"
-                        max="52"
-                        value={occurrences}
-                        onChange={(event) =>
-                          setOccurrences(
-                            Math.max(2, Number(event.target.value)),
-                          )
-                        }
-                      />
-                      times
-                    </label>
-                  </>
-                )}
-              </div>
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-[#4974ce]">
-                  {scheduleSummary}
-                </p>
-                <select
-                  className="max-w-[210px] rounded-lg border border-[#d6dfec] bg-white px-2 py-1.5 text-xs text-[#68758f] outline-none"
-                  value={timezone}
-                  onChange={(event) => setTimezone(event.target.value)}
-                  aria-label="Time zone"
-                >
-                  <option value={detectedTimezone}>
-                    {detectedTimezone} (detected)
-                  </option>
-                  {detectedTimezone !== "UTC" && (
-                    <option value="UTC">UTC</option>
-                  )}
-                  {detectedTimezone !== "America/New_York" && (
-                    <option value="America/New_York">America/New_York</option>
-                  )}
-                  {detectedTimezone !== "Asia/Kolkata" && (
-                    <option value="Asia/Kolkata">Asia/Kolkata</option>
-                  )}
-                </select>
-              </div>
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between gap-4">
-                <label
-                  className="font-bold text-[#17213e]"
-                  htmlFor="meeting-context"
-                >
-                  Context{" "}
-                  <span className="font-normal text-[#8390a6]">(optional)</span>
-                </label>
-                <div className="flex rounded-full bg-[#eef2f8] p-1 text-xs font-semibold">
-                  <button
-                    className={`rounded-full px-3 py-1.5 transition ${
-                      contextMode === "write"
-                        ? "bg-white text-[#3479f5] shadow-sm"
-                        : "text-[#68758f]"
-                    }`}
-                    type="button"
-                    onClick={() => setContextMode("write")}
-                  >
-                    Write
-                  </button>
-                  <button
-                    className={`rounded-full px-3 py-1.5 transition ${
-                      contextMode === "upload"
-                        ? "bg-white text-[#3479f5] shadow-sm"
-                        : "text-[#68758f]"
-                    }`}
-                    type="button"
-                    onClick={() => setContextMode("upload")}
-                  >
-                    Upload
-                  </button>
-                </div>
-              </div>
-
-              {contextMode === "write" ? (
-                <div className="relative mt-2 h-[180px] rounded-xl border border-[#cbd6e6] px-4 py-3.5 focus-within:border-[#3479f5] focus-within:ring-4 focus-within:ring-[#3479f5]/10">
-                  <textarea
-                    id="meeting-context"
-                    className="h-full w-full resize-none bg-transparent pb-5 outline-none placeholder:text-[#8792a8]"
-                    maxLength={1000}
-                    value={context}
-                    onChange={(event) => setContext(event.target.value)}
-                    placeholder="Write the agenda, goals, or anything Amber should know..."
-                  />
-                  <span className="absolute bottom-3 right-4 text-xs text-[#7d899e]">
-                    {context.length}/1000
-                  </span>
-                </div>
-              ) : (
-                <div
-                  className={`mt-2 flex h-[180px] flex-col items-center justify-center rounded-xl border border-dashed px-5 py-5 text-center transition ${
-                    dragging
-                      ? "border-[#3479f5] bg-[#f5f8ff]"
-                      : "border-[#cbd6e6] bg-[#fbfcfe]"
-                  }`}
-                  onDragEnter={(event) => {
-                    event.preventDefault()
-                    setDragging(true)
-                  }}
-                  onDragOver={(event) => event.preventDefault()}
-                  onDragLeave={() => setDragging(false)}
-                  onDrop={(event) => {
-                    event.preventDefault()
-                    setDragging(false)
-                    const file = event.dataTransfer.files[0]
-                    if (file) setFileName(file.name)
-                  }}
-                >
-                  <Upload className="mx-auto mb-2 h-6 w-6 text-[#3479f5]" />
-                  <p className="font-semibold text-[#34415d]">
-                    {fileName || "Drop a context file here"}
-                  </p>
-                  <p className="mt-1 text-xs text-[#8390a6]">
-                    {fileName ? "Ready to attach" : "PDF, DOC, or TXT"}
-                  </p>
-                  <button
-                    className="mt-3 rounded-full border border-[#c7d3e6] bg-white px-5 py-2 text-sm font-semibold text-[#3479f5] hover:border-[#3479f5]"
-                    type="button"
-                    onClick={() => fileInput.current?.click()}
-                  >
-                    {fileName ? "Choose another file" : "Choose file"}
-                  </button>
-                  <input
-                    ref={fileInput}
-                    className="hidden"
-                    type="file"
-                    accept=".pdf,.doc,.docx,.txt"
-                    onChange={(event) => {
-                      const file = event.target.files?.[0]
-                      if (file) setFileName(file.name)
-                    }}
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex justify-end gap-3 border-t border-[#e7ecf4] px-6 py-4 sm:px-8">
-          <button
-            className="rounded-full bg-[#eff3fa] px-8 py-3 font-bold text-[#17213e] transition hover:bg-[#e5ebf5]"
-            type="button"
-            onClick={onClose}
-          >
-            Cancel
-          </button>
-          <button
-            className="rounded-full bg-[#3479f5] px-10 py-3 font-bold text-white shadow-[0_10px_24px_rgba(52,121,245,0.22)] transition hover:bg-[#2068e7] disabled:cursor-not-allowed disabled:opacity-50"
-            type="button"
-            onClick={saveMeeting}
-            disabled={!meetName.trim()}
-          >
-            Save
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function WorkspaceModal({
   onClose,
   onSave,
@@ -1694,39 +1253,39 @@ function ScheduleMeetModal({
         aria-modal="true"
         aria-labelledby="schedule-title"
       >
-        <div className="overflow-y-auto px-6 pb-6 pt-7 sm:px-8">
-          <div className="flex items-start justify-between gap-5">
-            <div>
-              <h2
-                id="schedule-title"
-                className="text-2xl font-extrabold tracking-[-0.03em]"
-              >
-                Schedule a meet
-              </h2>
-              <p className="mt-1.5 text-sm text-[#6a7690]">
-                Choose where it belongs, then set the time.
-              </p>
-            </div>
-            <button
-              className="rounded-full p-2 hover:bg-[#f0f4fa]"
-              type="button"
-              onClick={onClose}
-              aria-label="Close"
+        <div className="flex shrink-0 items-start justify-between gap-5 border-b border-[#e7ecf4] px-6 pb-5 pt-7 sm:px-8">
+          <div>
+            <h2
+              id="schedule-title"
+              className="text-2xl font-extrabold tracking-[-0.03em]"
             >
-              <X className="h-5 w-5" />
-            </button>
+              Schedule a meet
+            </h2>
+            <p className="mt-1.5 text-sm text-[#6a7690]">
+              Choose where it belongs, then set the time.
+            </p>
           </div>
-
-          <div className="mt-6 space-y-5">
+          <button
+            className="rounded-full p-2 hover:bg-[#f0f4fa]"
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-6 sm:px-8">
+          <div className="space-y-5">
             <div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <label>
-                  <span className="mb-2 block text-sm font-bold">
+                  <span className="mb-2 block text-sm font-bold text-[#34415d]">
                     Workspace
                   </span>
                   <select
-                    className="w-full rounded-xl border border-[#cbd6e6] bg-white px-3 py-3 outline-none focus:border-[#3479f5]"
+                    className="w-full rounded-xl border border-[#cbd6e6] bg-white px-4 py-3.5 outline-none focus:border-[#3479f5]"
                     value={workspaceId}
+                    disabled={workspaces.length === 0}
                     onChange={(event) => {
                       const nextWorkspaceId = event.target.value
                       setWorkspaceId(nextWorkspaceId)
@@ -1737,6 +1296,9 @@ function ScheduleMeetModal({
                       setOverallContextExpanded(false)
                     }}
                   >
+                    <option value="" disabled>
+                      {workspaces.length ? "Select a workspace" : "No workspaces yet"}
+                    </option>
                     {workspaces.map((workspace) => (
                       <option key={workspace.id} value={workspace.id}>
                         {workspace.name}
@@ -1745,18 +1307,25 @@ function ScheduleMeetModal({
                   </select>
                 </label>
                 <label>
-                  <span className="mb-2 block text-sm font-bold">
+                  <span className="mb-2 block text-sm font-bold text-[#34415d]">
                     Meet type
                   </span>
                   <select
-                    className="w-full rounded-xl border border-[#cbd6e6] bg-white px-3 py-3 outline-none focus:border-[#3479f5]"
+                    className="w-full rounded-xl border border-[#cbd6e6] bg-white px-4 py-3.5 outline-none focus:border-[#3479f5]"
                     value={categoryId}
                     onChange={(event) => {
                       setCategoryId(event.target.value)
                       setOverallContextExpanded(false)
                     }}
-                    disabled={!selectedWorkspace}
+                    disabled={!selectedWorkspace?.categories.length}
                   >
+                    <option value="" disabled>
+                      {selectedWorkspace?.categories.length
+                        ? "Select a meet type"
+                        : selectedWorkspace
+                          ? "No meet types yet"
+                          : "Pick a workspace first"}
+                    </option>
                     {selectedWorkspace?.categories.map((category) => (
                       <option key={category.id} value={category.id}>
                         {category.name}
@@ -1768,7 +1337,7 @@ function ScheduleMeetModal({
             </div>
 
             <label className="block">
-              <span className="font-bold">Meet name</span>
+              <span className="text-sm font-bold text-[#34415d]">Meet name</span>
               <input
                 className="mt-2 w-full rounded-xl border border-[#cbd6e6] px-4 py-3.5 outline-none placeholder:text-[#8792a8] focus:border-[#3479f5] focus:ring-4 focus:ring-[#3479f5]/10"
                 value={title}
@@ -1778,7 +1347,7 @@ function ScheduleMeetModal({
               />
             </label>
             <label className="block">
-              <span className="font-bold">Meeting link</span>
+              <span className="text-sm font-bold text-[#34415d]">Meeting link</span>
               <input
                 className="mt-2 w-full rounded-xl border border-[#cbd6e6] px-4 py-3.5 outline-none placeholder:text-[#8792a8] focus:border-[#3479f5] focus:ring-4 focus:ring-[#3479f5]/10"
                 type="url"
@@ -1788,10 +1357,10 @@ function ScheduleMeetModal({
               />
             </label>
             <label className="block">
-              <span className="font-bold">Attendees</span>
+              <span className="text-sm font-bold text-[#34415d]">Attendees</span>
               <span className="ml-2 text-xs text-[#8792a8]">one per line: Name, email (for the recap and reminders)</span>
               <textarea
-                className="mt-2 h-20 w-full resize-none rounded-xl border border-[#cbd6e6] px-4 py-3 text-sm outline-none placeholder:text-[#8792a8] focus:border-[#3479f5] focus:ring-4 focus:ring-[#3479f5]/10"
+                className="mt-2 h-20 w-full resize-none rounded-xl border border-[#cbd6e6] px-4 py-3 outline-none placeholder:text-[#8792a8] focus:border-[#3479f5] focus:ring-4 focus:ring-[#3479f5]/10"
                 value={attendees}
                 onChange={(event) => setAttendees(event.target.value)}
                 placeholder={"Rahul Mehta, rahul@company.com\nPriya, priya@company.com"}
@@ -1799,14 +1368,14 @@ function ScheduleMeetModal({
             </label>
 
             <div>
-              <span className="font-bold">Repeat</span>
+              <span className="text-sm font-bold text-[#34415d]">Repeat</span>
               <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5">
                 {(Object.keys(
                   recurrenceLabels,
                 ) as ScheduleDraft["recurrence"][]).map((option) => (
                   <button
                     key={option}
-                    className={`rounded-xl border px-2 py-2.5 text-xs font-semibold transition ${
+                    className={`whitespace-nowrap rounded-xl border px-2 py-2.5 text-xs font-semibold transition sm:text-sm ${
                       recurrence === option
                         ? "border-[#3479f5] bg-[#edf4ff] text-[#3479f5]"
                         : "border-[#d7dfec] text-[#68758f] hover:border-[#aebfdb]"
@@ -1822,11 +1391,11 @@ function ScheduleMeetModal({
 
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <label className="col-span-2">
-                <span className="mb-2 block text-sm font-semibold text-[#526079]">
+                <span className="mb-2 block text-sm font-bold text-[#34415d]">
                   {recurring ? "Starts on" : "Date"}
                 </span>
                 <input
-                  className="w-full rounded-xl border border-[#cbd6e6] px-3 py-3 outline-none focus:border-[#3479f5]"
+                  className="w-full rounded-xl border border-[#cbd6e6] px-4 py-3.5 outline-none focus:border-[#3479f5]"
                   type="date"
                   min={dateKey(getToday())}
                   value={startDate}
@@ -1834,22 +1403,22 @@ function ScheduleMeetModal({
                 />
               </label>
               <label>
-                <span className="mb-2 block text-sm font-semibold text-[#526079]">
+                <span className="mb-2 block text-sm font-bold text-[#34415d]">
                   Time
                 </span>
                 <input
-                  className="w-full rounded-xl border border-[#cbd6e6] px-3 py-3 outline-none focus:border-[#3479f5]"
+                  className="w-full rounded-xl border border-[#cbd6e6] px-4 py-3.5 outline-none focus:border-[#3479f5]"
                   type="time"
                   value={time}
                   onChange={(event) => setTime(event.target.value)}
                 />
               </label>
               <label>
-                <span className="mb-2 block text-sm font-semibold text-[#526079]">
+                <span className="mb-2 block text-sm font-bold text-[#34415d]">
                   Duration
                 </span>
                 <select
-                  className="w-full rounded-xl border border-[#cbd6e6] bg-white px-3 py-3 outline-none focus:border-[#3479f5]"
+                  className="w-full rounded-xl border border-[#cbd6e6] bg-white px-4 py-3.5 outline-none focus:border-[#3479f5]"
                   value={duration}
                   onChange={(event) => setDuration(event.target.value)}
                 >
@@ -2050,29 +1619,28 @@ function EditAgendaModal({
         aria-modal="true"
         aria-labelledby="agenda-title"
       >
-        <div className="min-h-0 overflow-y-auto px-6 pb-6 pt-7">
-          <div className="flex items-start justify-between gap-5">
-            <div>
-              <h2
-                id="agenda-title"
-                className="text-2xl font-extrabold tracking-[-0.03em]"
-              >
-                Set today&apos;s agenda
-              </h2>
-              <p className="mt-1.5 text-sm leading-6 text-[#6a7690]">
-                Add the topics or preparation that are unique to today.
-              </p>
-            </div>
-            <button
-              className="rounded-full p-2 hover:bg-[#f0f4fa]"
-              type="button"
-              onClick={onClose}
-              aria-label="Close"
+        <div className="flex shrink-0 items-start justify-between gap-5 border-b border-[#e7ecf4] px-6 pb-5 pt-7 sm:px-8">
+          <div>
+            <h2
+              id="agenda-title"
+              className="text-2xl font-extrabold tracking-[-0.03em]"
             >
-              <X className="h-5 w-5" />
-            </button>
+              Set today&apos;s agenda
+            </h2>
+            <p className="mt-1.5 text-sm leading-6 text-[#6a7690]">
+              Add the topics or preparation that are unique to today.
+            </p>
           </div>
-
+          <button
+            className="rounded-full p-2 hover:bg-[#f0f4fa]"
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6 pt-1 sm:px-8">
           {overallAgenda && (
             <div
               className={`mt-5 rounded-2xl border border-[#d9e4f4] bg-[#f6f9fe] px-4 py-3.5 transition-[height] duration-200 ${
@@ -2399,111 +1967,6 @@ function MeetActionModal({
   )
 }
 
-function TodayMeetList({
-  meetings,
-  onJoin,
-  onSchedule,
-}: {
-  meetings: ScheduledMeet[]
-  onJoin: (meeting: ScheduledMeet) => void
-  onSchedule: () => void
-}) {
-  const upcoming = meetings.filter(({ status }) => status !== "ended")
-  const ended = meetings.filter(({ status }) => status === "ended")
-
-  const renderMeeting = (meeting: ScheduledMeet, index: number) => (
-    <div
-      key={`${meeting.title}-${meeting.time}-${index}`}
-      className={`flex items-center gap-4 rounded-2xl border p-4 shadow-[0_8px_24px_rgba(43,67,114,0.04)] md:p-5 ${
-        meeting.status === "ended"
-          ? "border-[#e4e8ef] bg-[#f8f9fb]"
-          : "border-[#d9e4f4] bg-white"
-      }`}
-    >
-      <span
-        className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl ${
-          meeting.status === "ended"
-            ? "bg-[#e9edf3] text-[#778399]"
-            : "bg-[#e8f0ff] text-[#3479f5]"
-        }`}
-      >
-        <Video className="h-5 w-5" />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span
-          className={`block truncate text-base font-bold md:text-lg ${
-            meeting.status === "ended" ? "text-[#657087]" : "text-[#19233f]"
-          }`}
-        >
-          {meeting.title}
-        </span>
-        <span className="mt-1 block text-sm text-[#7a869c]">
-          {meeting.time} · {meeting.duration} · {meeting.type}
-        </span>
-      </span>
-      <button
-        className={`shrink-0 rounded-full px-5 py-2.5 text-sm font-bold transition ${
-          meeting.status === "ended"
-            ? "border border-[#ccd4e0] text-[#5f6c82] hover:border-[#8795ab]"
-            : "bg-[#3479f5] text-white hover:bg-[#2068e7]"
-        }`}
-        type="button"
-        onClick={() => onJoin(meeting)}
-      >
-        {meeting.status === "ended" ? "Rejoin" : "Join"}
-      </button>
-    </div>
-  )
-
-  return (
-    <div className="mx-auto w-full max-w-[940px] py-4">
-      <div className="mb-7 flex items-end justify-between gap-4">
-        <div>
-          <p className="text-sm font-semibold uppercase tracking-[0.12em] text-[#7a87a0]">
-            Today
-          </p>
-          <h2 className="mt-1 text-3xl font-extrabold tracking-[-0.035em]">
-            Your meetings
-          </h2>
-          <p className="mt-1 text-sm text-[#758199]">
-            {upcoming.length} upcoming · {ended.length} ended
-          </p>
-        </div>
-        <button
-          className="flex items-center gap-2 rounded-full border border-[#bfd0e7] bg-[#f7faff] px-5 py-3 text-sm font-bold text-[#3479f5] transition hover:border-[#3479f5] hover:bg-[#eef4ff]"
-          type="button"
-          onClick={onSchedule}
-        >
-          <CalendarDays className="h-4 w-4" /> Schedule meet
-        </button>
-      </div>
-
-      <section>
-        <h3 className="mb-3 text-sm font-bold uppercase tracking-[0.1em] text-[#53617b]">
-          Upcoming
-        </h3>
-        <div className="space-y-3">
-          {upcoming.length ? (
-            upcoming.map(renderMeeting)
-          ) : (
-            <p className="rounded-2xl border border-dashed border-[#d8e1ef] py-8 text-center text-sm text-[#8490a5]">
-              No upcoming meetings today.
-            </p>
-          )}
-        </div>
-      </section>
-      {ended.length > 0 && (
-        <section className="mt-7">
-          <h3 className="mb-3 text-sm font-bold uppercase tracking-[0.1em] text-[#7b879c]">
-            Ended
-          </h3>
-          <div className="space-y-3">{ended.map(renderMeeting)}</div>
-        </section>
-      )}
-    </div>
-  )
-}
-
 function DeleteDialog({
   title,
   message,
@@ -2562,335 +2025,6 @@ function DeleteDialog({
   )
 }
 
-function JoinMeetPanel({
-  workspace,
-  category,
-  todayMeetings,
-  onStore,
-  onSchedule,
-}: {
-  workspace?: Workspace
-  category?: {
-    id: string
-    name: string
-  }
-  todayMeetings: ScheduledMeet[]
-  onStore: (
-    meeting: Omit<StoredMeeting, "id" | "createdAt" | "workspaceId" | "categoryId">,
-  ) => void
-  onSchedule: () => void
-}) {
-  const fileInput = useRef<HTMLInputElement>(null)
-  const [fileName, setFileName] = useState("")
-  const [meetName, setMeetName] = useState("")
-  const [meetLink, setMeetLink] = useState("")
-  const [agenda, setAgenda] = useState("")
-  const [agendaMode, setAgendaMode] = useState<"write" | "upload">("write")
-  const [dragging, setDragging] = useState(false)
-  const [formMessage, setFormMessage] = useState("")
-  const [todayOpen, setTodayOpen] = useState(false)
-  const upcomingMeetings = todayMeetings.filter(
-    ({ status }) => status !== "ended",
-  )
-  const endedMeetings = todayMeetings.filter(({ status }) => status === "ended")
-
-  const acceptFile = (file?: File) => {
-    if (file) setFileName(file.name)
-  }
-
-  const joinMeeting = () => {
-    if (!workspace || !category) {
-      setFormMessage("Select a workspace and meeting category before joining.")
-      return
-    }
-
-    if (!meetName.trim() || !meetLink.trim()) {
-      setFormMessage("Add a meet name and meeting link before joining.")
-      return
-    }
-
-    onStore({
-      name: meetName.trim(),
-      link: meetLink.trim(),
-      agenda,
-      fileName,
-    })
-    setFormMessage(
-      `Saved to ${workspace.name} / ${category.name}. Amber is ready to join.`,
-    )
-  }
-
-  return (
-    <div className="relative flex flex-1 flex-col items-center overflow-hidden rounded-[28px] border border-[#e3eaf6] bg-[radial-gradient(circle_at_top,#fbfdff_0%,#ffffff_48%)] px-5 py-9 shadow-[0_18px_60px_rgba(45,72,125,0.06)] md:px-10 md:py-12">
-      <div className="relative z-10 w-full max-w-[760px] text-center">
-        <h2 className="text-3xl font-extrabold tracking-[-0.035em] md:text-4xl">
-          Join your meeting with <span className="text-[#3479f5]">Amber</span>
-        </h2>
-        <p className="mx-auto mt-3 max-w-[650px] text-base leading-7 text-[#65718d] md:text-lg">
-          Paste the meeting link, add your agenda, and let Amber join, listen,
-          take notes and help you in real time.
-        </p>
-        <div
-          className={`mx-auto mt-4 inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold ${
-            workspace && category
-              ? "bg-[#eef4ff] text-[#4974ce]"
-              : "bg-[#fff1f1] text-[#c04d4d]"
-          }`}
-        >
-          {workspace && category ? (
-            <>
-              {workspace.name} <span className="text-[#9aabc8]">/</span>{" "}
-              {category.name}
-            </>
-          ) : (
-            "Select workspace and category"
-          )}
-        </div>
-        <button
-          className="ml-2 inline-flex items-center gap-2 rounded-full border border-[#cbd8ec] bg-white px-4 py-2 text-sm font-bold text-[#3479f5] transition hover:border-[#3479f5]"
-          type="button"
-          onClick={onSchedule}
-        >
-          <CalendarDays className="h-4 w-4" /> Schedule
-        </button>
-      </div>
-
-      <div className="relative z-10 mt-6 w-full max-w-[760px]">
-        <div className="mb-5 overflow-hidden rounded-2xl border border-[#dce5f2] bg-white shadow-[0_8px_24px_rgba(43,67,114,0.04)]">
-          <button
-            className="flex w-full items-center gap-3 px-5 py-4 text-left"
-            type="button"
-            onClick={() => setTodayOpen((open) => !open)}
-            aria-expanded={todayOpen}
-          >
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-[#edf4ff] text-[#3479f5]">
-              <CalendarDays className="h-4 w-4" />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block font-bold">Today&apos;s meetings</span>
-              <span className="mt-0.5 block text-xs text-[#7b879d]">
-                {upcomingMeetings.length} upcoming · {endedMeetings.length}{" "}
-                ended
-              </span>
-            </span>
-            <ChevronDown
-              className={`h-5 w-5 text-[#74819a] transition-transform ${
-                todayOpen ? "rotate-180" : ""
-              }`}
-            />
-          </button>
-          {todayOpen && (
-            <div className="border-t border-[#edf0f5] px-5 py-3">
-              {todayMeetings.length === 0 ? (
-                <p className="py-3 text-center text-sm text-[#7b879d]">
-                  Nothing scheduled for today.
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {[...upcomingMeetings, ...endedMeetings].map(
-                    (meeting, index) => (
-                      <div
-                        key={`${meeting.title}-${meeting.time}-${index}`}
-                        className={`flex items-center gap-3 rounded-xl px-3 py-3 ${
-                          meeting.status === "ended"
-                            ? "bg-[#f7f8fa] opacity-70"
-                            : "bg-[#f5f8ff]"
-                        }`}
-                      >
-                        <span
-                          className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${
-                            meeting.status === "ended"
-                              ? "bg-[#e9edf3] text-[#7d899d]"
-                              : "bg-[#e5eeff] text-[#3479f5]"
-                          }`}
-                        >
-                          <Video className="h-4 w-4" />
-                        </span>
-                        <span className="min-w-0 flex-1 text-left">
-                          <span className="block truncate text-sm font-bold">
-                            {meeting.title}
-                          </span>
-                          <span className="mt-0.5 block text-xs text-[#7b879d]">
-                            {meeting.time} · {meeting.duration} · {meeting.type}
-                          </span>
-                        </span>
-                        <span
-                          className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
-                            meeting.status === "ended"
-                              ? "bg-[#e8ebf0] text-[#707c90]"
-                              : "bg-[#e5f5ed] text-[#27815a]"
-                          }`}
-                        >
-                          {meeting.status === "ended" ? "Ended" : "Upcoming"}
-                        </span>
-                      </div>
-                    ),
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        <label className="mb-4 flex items-center gap-3 rounded-2xl border border-[#cdd8e9] bg-white px-5 py-4 transition focus-within:border-[#3479f5] focus-within:ring-4 focus-within:ring-[#3479f5]/10">
-          <input
-            className="w-full bg-transparent text-lg outline-none placeholder:text-[#8792a8]"
-            type="text"
-            value={meetName}
-            onChange={(event) => {
-              setMeetName(event.target.value)
-              setFormMessage("")
-            }}
-            placeholder="Enter meet name"
-            aria-label="Meet name"
-          />
-        </label>
-        <label className="flex items-center gap-3 rounded-2xl border border-[#cdd8e9] bg-white px-5 py-4 transition focus-within:border-[#3479f5] focus-within:ring-4 focus-within:ring-[#3479f5]/10">
-          <input
-            className="w-full bg-transparent text-lg outline-none placeholder:text-[#8792a8]"
-            type="url"
-            value={meetLink}
-            onChange={(event) => {
-              setMeetLink(event.target.value)
-              setFormMessage("")
-            }}
-            placeholder="Paste Google Meet, Zoom, or Microsoft Teams link"
-            aria-label="Meeting link"
-          />
-        </label>
-
-        <div className="mt-5 rounded-2xl border border-[#cbd7e8] bg-white p-5">
-          <div className="flex items-center justify-between gap-4">
-            <div className="font-bold">
-              Meeting agenda{" "}
-              <span className="font-normal text-[#8390a6]">(optional)</span>
-            </div>
-            <div className="flex rounded-full bg-[#eef2f8] p-1 text-xs font-semibold">
-              <button
-                className={`rounded-full px-3 py-1.5 transition ${
-                  agendaMode === "write"
-                    ? "bg-white text-[#3479f5] shadow-sm"
-                    : "text-[#68758f]"
-                }`}
-                type="button"
-                onClick={() => setAgendaMode("write")}
-              >
-                Write
-              </button>
-              <button
-                className={`rounded-full px-3 py-1.5 transition ${
-                  agendaMode === "upload"
-                    ? "bg-white text-[#3479f5] shadow-sm"
-                    : "text-[#68758f]"
-                }`}
-                type="button"
-                onClick={() => setAgendaMode("upload")}
-              >
-                Upload
-              </button>
-            </div>
-          </div>
-
-          {agendaMode === "write" ? (
-            <div className="relative mt-4 h-[178px] rounded-xl bg-[#f2f5fa] px-4 py-3.5 focus-within:ring-2 focus-within:ring-[#3479f5]/20">
-              <textarea
-                className="h-full w-full resize-none bg-transparent pb-5 outline-none placeholder:text-[#8a95aa]"
-                maxLength={1000}
-                value={agenda}
-                onChange={(event) => setAgenda(event.target.value)}
-                placeholder="Write the agenda, talking points, or meeting goals..."
-                aria-label="Meeting agenda"
-              />
-              <span className="absolute bottom-3 right-4 text-xs text-[#7d899e]">
-                {agenda.length}/1000
-              </span>
-            </div>
-          ) : (
-            <div
-              className={`mt-4 flex h-[178px] flex-col items-center justify-center rounded-xl border border-dashed px-5 py-5 text-center transition ${
-                dragging
-                  ? "border-[#3479f5] bg-[#f5f8ff]"
-                  : "border-[#cbd7e8] bg-[#fbfcfe]"
-              }`}
-              onDragEnter={(event) => {
-                event.preventDefault()
-                setDragging(true)
-              }}
-              onDragOver={(event) => event.preventDefault()}
-              onDragLeave={() => setDragging(false)}
-              onDrop={(event) => {
-                event.preventDefault()
-                setDragging(false)
-                acceptFile(event.dataTransfer.files[0])
-              }}
-            >
-              <Upload className="mx-auto mb-2 h-6 w-6 text-[#3479f5]" />
-              <p className="font-semibold text-[#34415d]">
-                {fileName || "Drop an agenda file here"}
-              </p>
-              <p className="mt-1 text-xs text-[#8390a6]">
-                {fileName ? "Ready to attach" : "PDF, DOC, or TXT"}
-              </p>
-              <button
-                className="mt-3 rounded-full border border-[#c7d3e6] bg-white px-5 py-2 text-sm font-semibold text-[#3479f5] hover:border-[#3479f5]"
-                type="button"
-                onClick={() => fileInput.current?.click()}
-              >
-                {fileName ? "Choose another file" : "Choose file"}
-              </button>
-              <input
-                ref={fileInput}
-                className="hidden"
-                type="file"
-                accept=".pdf,.doc,.docx,.txt"
-                onChange={(event) => acceptFile(event.target.files?.[0])}
-              />
-            </div>
-          )}
-        </div>
-      </div>
-
-      <button
-        className="relative z-10 mt-7 flex w-full max-w-[350px] items-center justify-center gap-3 rounded-full bg-[#3479f5] px-8 py-4 text-lg font-bold text-white shadow-[0_14px_30px_rgba(52,121,245,0.25)] transition hover:-translate-y-0.5 hover:bg-[#2068e7]"
-        type="button"
-        onClick={joinMeeting}
-      >
-        <Video className="h-6 w-6 fill-current" /> Join Meet
-      </button>
-      <p
-        className={`relative z-10 mt-3 min-h-5 text-center text-sm font-semibold ${
-          formMessage.startsWith("Saved") ? "text-[#16966a]" : "text-[#d14d4d]"
-        }`}
-        role="status"
-      >
-        {formMessage}
-      </p>
-
-      <div
-        className="pointer-events-none absolute bottom-0 left-0 hidden h-52 w-60 items-end justify-start bg-[radial-gradient(circle_at_bottom_left,#eef5ff_0%,transparent_68%)] min-[1280px]:flex"
-        aria-hidden="true"
-      >
-        <img
-          className="ml-3 w-[190px] object-contain object-bottom"
-          src="/assets/amber-assistant.svg"
-          alt=""
-        />
-      </div>
-      <div
-        className="pointer-events-none absolute bottom-0 right-0 hidden h-56 w-52 items-end justify-end bg-[radial-gradient(circle_at_bottom_right,#eef5ff_0%,transparent_68%)] min-[1280px]:flex"
-        aria-hidden="true"
-      >
-        <img
-          className="mr-4 w-[145px] object-contain object-bottom"
-          src="/assets/meeting-checklist.svg"
-          alt=""
-        />
-      </div>
-    </div>
-  )
-}
-
-// "Name, email" per line (email optional) -> attendees for the recap and reminders.
 const parseAttendees = (text: string) =>
   text
     .split("\n")
@@ -4400,7 +3534,7 @@ function Dashboard() {
         </div>
       )}
       <section className="stable-scrollbar flex min-w-0 flex-1 flex-col overflow-y-auto">
-        <div className="flex items-center justify-between border-b border-[#e8edf5] px-5 py-4 lg:hidden">
+        <div className="flex shrink-0 items-center justify-between border-b border-[#e8edf5] px-5 py-4 lg:hidden">
           <button
             className="grid h-11 w-11 place-items-center rounded-full border border-[#d7e0ed] bg-white text-[#43516c]"
             type="button"
@@ -4422,7 +3556,7 @@ function Dashboard() {
             <Plus className="h-5 w-5" />
           </button>
         </div>
-        <header className="sticky-date-header sticky top-0 z-30 flex min-h-[88px] w-full flex-col justify-between gap-5 bg-white/95 px-5 backdrop-blur-md md:grid md:grid-cols-[240px_minmax(0,1fr)] md:items-center md:px-8 xl:px-10">
+        <header className="sticky-date-header sticky top-0 z-30 flex min-h-[88px] shrink-0 w-full flex-col justify-between gap-5 bg-white/95 px-5 pb-3 md:pb-0 backdrop-blur-md md:grid md:grid-cols-[240px_minmax(0,1fr)] md:items-center md:px-8 xl:px-10">
           <div className="flex min-w-0 items-center gap-4">
             <div>
               <h1 className="mt-0.5 truncate text-3xl font-extrabold tabular-nums tracking-[-0.04em]">
@@ -4435,7 +3569,7 @@ function Dashboard() {
               </span>
             )}
           </div>
-          <div className="flex items-center justify-end gap-1 overflow-x-auto">
+          <div className="flex items-center justify-end-safe gap-1 overflow-x-auto">
             <button
               className="shrink-0 rounded-lg p-2 hover:bg-[#f5f7fb]"
               type="button"
@@ -4454,7 +3588,7 @@ function Dashboard() {
               return (
                 <button
                   key={dateKey(date)}
-                  className={`relative flex min-w-14 flex-col items-center rounded-2xl px-3 py-2 text-xs font-semibold transition ${
+                  className={`relative flex min-w-14 shrink-0 flex-col items-center rounded-2xl px-3 py-2 text-xs font-semibold transition ${
                     active
                       ? "bg-[#e8f0ff] text-[#3479f5]"
                       : "text-[#34415d] hover:bg-[#f7f9fc]"
@@ -4488,7 +3622,7 @@ function Dashboard() {
           </div>
         </header>
 
-        <nav className="mx-auto flex w-full max-w-[1240px] gap-2 px-5 pt-3 md:px-8 xl:px-10" aria-label="Sections">
+        <nav className="mx-auto flex w-full max-w-[1240px] shrink-0 gap-2 px-5 pt-3 md:px-8 xl:px-10" aria-label="Sections">
           {(
             [
               ["meetings", "Meetings"],
@@ -4515,9 +3649,11 @@ function Dashboard() {
           ))}
         </nav>
         {backendError && (
-          <p className="mx-auto mt-3 w-full max-w-[940px] rounded-xl bg-[#fff1f1] px-4 py-2.5 text-sm font-semibold text-[#c04d4d]">
-            {backendError}
-          </p>
+          <div className="mx-auto mt-3 w-full max-w-[1240px] px-5 md:px-8 xl:px-10">
+            <p className="rounded-xl bg-[#fff1f1] px-4 py-2.5 text-sm font-semibold text-[#c04d4d]">
+              {backendError}
+            </p>
+          </div>
         )}
 
         {detailMeeting ? (
@@ -4574,7 +3710,7 @@ function Dashboard() {
             {selectedMeetings.length === 0 ? (
               sameDay(selectedDate, today) ? (
                 <>
-                  <div className="mx-auto flex w-full max-w-[940px] flex-col justify-between gap-4 rounded-[24px] border border-[#dce5f2] bg-gradient-to-r from-[#f8fbff] to-white px-6 py-5 sm:flex-row sm:items-center">
+                  <div className="flex w-full flex-col justify-between gap-4 rounded-[24px] border border-[#dce5f2] bg-gradient-to-r from-[#f8fbff] to-white px-6 py-5 sm:flex-row sm:items-center">
                     <div className="flex items-center gap-4">
                       <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-[#eaf2ff] text-[#3479f5]">
                         <CalendarDays className="h-6 w-6" />
@@ -4599,7 +3735,7 @@ function Dashboard() {
                       <CalendarDays className="h-4 w-4" /> Schedule meet
                     </button>
                   </div>
-                  <div className="mx-auto w-full max-w-[940px]">
+                  <div className="w-full">
                     <QuickJoinCard
                       workspace={selectedWorkspace}
                       category={selectedCategory}
@@ -4625,7 +3761,7 @@ function Dashboard() {
               )
             ) : (
               <>
-                <div className="mx-auto w-full max-w-[940px] pt-4">
+                <div className="w-full pt-4">
                   <div className="mb-5 flex items-end justify-between gap-4">
                     <div>
                       <p className="text-sm font-semibold uppercase tracking-[0.12em] text-[#7a87a0]">
@@ -4673,6 +3809,12 @@ function Dashboard() {
                       const meetingWorkspace = workspaces.find(
                         ({ id }) => id === meeting.workspaceId,
                       )
+                      const badge =
+                        apiId !== null
+                          ? statusLabel(apiMeetings.find(({ id }) => id === apiId)?.status ?? "")
+                          : completed
+                            ? "Completed"
+                            : "Upcoming"
                       const hasDailyAgenda = Boolean(
                         meeting.context?.trim() || meeting.fileName,
                       )
@@ -4708,17 +3850,23 @@ function Dashboard() {
                               <span className="inline-flex items-center gap-1.5">
                                 <Clock3 className="h-3.5 w-3.5" />
                                 {meeting.time}
-                                <span className="text-[#a1acc0]">·</span>
-                                {meeting.duration}
+                                {meeting.duration && meeting.duration !== "-" && (
+                                  <>
+                                    <span className="text-[#a1acc0]">·</span>
+                                    {meeting.duration}
+                                  </>
+                                )}
                               </span>
                               {meetingWorkspace && (
                                 <span className="inline-flex items-center rounded-full bg-[#f1f4f8] px-2.5 py-1 text-[#53617a]">
                                   {meetingWorkspace.name}
                                 </span>
                               )}
-                              <span className="inline-flex items-center rounded-full bg-[#eef4ff] px-2.5 py-1 text-[#4974ce]">
-                                {meeting.type}
-                              </span>
+                              {apiId === null && (
+                                <span className="inline-flex items-center rounded-full bg-[#eef4ff] px-2.5 py-1 text-[#4974ce]">
+                                  {meeting.type}
+                                </span>
+                              )}
                             </span>
                           </span>
                           {!completed && apiId === null && (
@@ -4752,17 +3900,15 @@ function Dashboard() {
                             </button>
                           )}
                           <span
-                            className={`hidden rounded-full px-3 py-1.5 text-xs font-semibold sm:inline-flex ${
-                              completed
-                                ? "bg-[#edf7f1] text-[#2c8d61]"
-                                : "bg-[#eef4ff] text-[#4974ce]"
+                            className={`hidden shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold sm:inline-flex ${
+                              badge === "Failed" || badge === "Cancelled"
+                                ? "bg-[#fff1f1] text-[#c04d4d]"
+                                : completed
+                                  ? "bg-[#edf7f1] text-[#2c8d61]"
+                                  : "bg-[#eef4ff] text-[#4974ce]"
                             }`}
                           >
-                            {apiId !== null
-                              ? statusLabel(apiMeetings.find(({ id }) => id === apiId)?.status ?? "")
-                              : completed
-                                ? "Completed"
-                                : "Upcoming"}
+                            {badge}
                           </span>
                         </div>
                       )
@@ -4770,7 +3916,7 @@ function Dashboard() {
                   </div>
                 </div>
                 {sameDay(selectedDate, today) && (
-                  <div className="mx-auto w-full max-w-[940px]">
+                  <div className="w-full">
                     <QuickJoinCard
                       workspace={selectedWorkspace}
                       category={selectedCategory}

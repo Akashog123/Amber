@@ -48,17 +48,45 @@ button {
   cursor: pointer;
 }
 
+/* Unlayered on purpose: beats Tailwind's px-* so the chevron never sits under text. */
+select {
+  appearance: none;
+  padding-right: 2.75rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2374819a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.9rem center;
+  background-size: 1.1rem;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: border-color 150ms, box-shadow 150ms;
+}
+
+select:hover:not(:disabled) {
+  border-color: #a9bbd6;
+}
+
+select:focus {
+  border-color: #3479f5;
+  box-shadow: 0 0 0 4px rgba(52, 121, 245, 0.1);
+}
+
+select:disabled {
+  background-color: #f5f7fb;
+  color: #9aa5b7;
+  cursor: not-allowed;
+}
+
 button svg {
   flex-shrink: 0;
 }
 
 button:focus-visible,
-a:focus-visible,
-select:focus-visible {
+a:focus-visible {
   outline: 3px solid rgba(52, 121, 245, 0.28);
   outline-offset: 3px;
 }
 
+select:focus,
 input:focus,
 input:focus-visible,
 textarea:focus,

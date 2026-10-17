@@ -43,7 +43,7 @@ export function RecordsPage() {
   useAmberEvents((e) => e.type === "record.noted" && load())
 
   return (
-    <div className="mx-auto w-full max-w-[1040px] px-5 pb-8 md:px-8">
+    <div className="mx-auto mt-5 w-full max-w-[1240px] px-5 pb-8 md:px-8 xl:px-10">
       <PageHeader icon={Boxes} title="Records" subtitle="Procurement log and equipment list. Amber adds meeting notes here." onRefresh={load} />
       {error && <p className="mb-3 text-sm font-semibold text-[#c94848]">{error}</p>}
       <div className="space-y-3">
@@ -93,7 +93,7 @@ export function OutboxPage() {
   useAmberEvents((e) => (e.type === "meeting.recap" || e.type === "task.reminded") && load())
 
   return (
-    <div className="mx-auto w-full max-w-[1240px] px-5 pb-8 md:px-8">
+    <div className="mx-auto mt-5 w-full max-w-[1240px] px-5 pb-8 md:px-8 xl:px-10">
       <PageHeader icon={Mail} title="Outbox" subtitle="Every recap and reminder Amber sent, or tried to." onRefresh={load} />
       {error && <p className="mb-3 text-sm font-semibold text-[#c94848]">{error}</p>}
       <div className="grid gap-4 lg:grid-cols-[420px_minmax(0,1fr)]">
