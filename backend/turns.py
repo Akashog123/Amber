@@ -40,6 +40,10 @@ _ASKS = {"what", "what's", "whats", "when", "where", "who", "whose", "which", "h
          "kaun", "kitna", "kahan"}
 
 
+def ends_sentence(text: str) -> bool:
+    return text.rstrip().endswith((".", "?", "!", "।"))
+
+
 def clear_question(text: str) -> bool:
     """Unmistakably a question: ends with "?" or starts with a question word ("and when does it arrive").
     Words like "check" or "status" alone don't count: "wait, let me check the PO" is not a question."""
@@ -77,6 +81,9 @@ class Conversation:
     # speaker -> when their current line began (first partial transcript). Finals land seconds late, and a window
     # counts from when they started speaking, not from when the ASR delivered it.
     talking_since: dict[str, float] = field(default_factory=dict)
+    # The ASR here punctuates finished sentences (seen on a real line), so an unpunctuated one was cut mid-way.
+    # Typed / replayed lines often carry no punctuation at all: then "no full stop" means nothing.
+    punctuated: bool = False
 
 
 @dataclass
@@ -105,7 +112,12 @@ def route(conv: Conversation, speaker: str, text: str, addressed: bool, names_ot
     opens = clear_question(text.rstrip(" ?.!")) and not names_other  # starts like a question of its own
     standalone = (asks or opens) and not names_other
 
+    if q and names_other and not addressed:  # "Amit, you follow up with the vendor" is for Amit, not more question
+        return Route("ignore", "addressed to someone else", text, cancel)
     if q and not q.get("generating"):
+        if addressed and opens and has_content(" ".join(q["parts"])):
+            # "Amber, who owns the boiler?" ... "Amber, what's the VFD status?": a second question, not more words
+            return Route("queue", "a second question while the first was still being asked", text, cancel)
         return Route("append", "still asking", text, cancel)
     if q:  # her answer is being prepared
         if judged:  # live: "Like, let me see the..." + "Chat or your data." got two answers
@@ -114,7 +126,8 @@ def route(conv: Conversation, speaker: str, text: str, addressed: bool, names_ot
             return Route("merge", "correction while the answer was being prepared", text, cancel)
         if question_pending(" ".join(q["parts"])):
             return Route("merge", 'the question after just "Amber,"', text, cancel)
-        if not opens and not q["parts"][-1].rstrip().endswith((".", "?", "!", "।")):
+        if (conv.punctuated and not opens and not names_other and has_content(text) and not question_pending(text)
+                and not ends_sentence(q["parts"][-1])):  # (a bare "Amber" starts a new question, never ends one)
             # The ASR punctuates finished sentences, so this one was cut mid-way (live: "Amber, the Grundfos pump
             # shipment got" + "out by three weeks." was judged as two lines). The next line finishes it.
             return Route("merge", "finishing the sentence she was waiting on", text, cancel)
@@ -153,13 +166,18 @@ if __name__ == "__main__":
     assert route(c, "A", "we both are talking and Amber thought, hey", True, False, 0).action == "classify"
     c.pending["A"] = {"parts": ["Amber,"], "generating": True}
     assert route(c, "A", "have we ordered the PPE kits", False, False, 0).why == 'the question after just "Amber,"'
+    c.pending["A"] = {"parts": ["Amber, check if the vendor sent the tracking ID"]}
+    assert route(c, "A", "Amit, you follow up with the vendor", False, True, 0).action == "ignore"  # not "still asking"
     c.pending["A"] = {"parts": ["Amber, who owns the chiller service"], "generating": True}
     assert route(c, "A", "contract?", False, False, 0).action == "merge"
     assert route(c, "A", "and when does it arrive?", False, False, 0).action == "queue"
-    assert route(c, "A", "yeah do that one", False, False, 0).action == "merge"  # the cut sentence goes on
+    assert route(c, "A", "yeah do that one", False, False, 0).action == "classify"
     assert route(c, "A", "yeah do that one", True, False, 0, judged=True).action == "merge"  # one question, one answer
     c.pending["A"] = {"parts": ["Amber, the Grundfos pump shipment got"], "generating": True}
+    assert route(c, "A", "out by three weeks.", False, False, 0).action != "merge"  # no punctuation seen yet
+    c.punctuated = True
     assert route(c, "A", "out by three weeks.", False, False, 0).action == "merge"  # sentence cut mid-way
+    assert route(c, "A", "Amit, you follow up with the vendor", False, True, 0).action != "merge"  # for Amit
     c.pending.clear()
     c.followups["A"] = (10.0, False)
     assert route(c, "A", "Rahul, please send it", False, True, 5).action == "ignore"

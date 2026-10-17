@@ -8,6 +8,7 @@ import sys
 import time
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
+from difflib import SequenceMatcher
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -29,8 +30,8 @@ import brain  # noqa: E402
 import mailer  # noqa: E402
 import seed  # noqa: E402
 import voice  # noqa: E402
-from turns import (CANCEL, CORRECTION, HINDI, QUESTION, WAKE, Conversation, has_content, question_pending,  # noqa: E402
-                   route)
+from turns import (CANCEL, CORRECTION, HINDI, QUESTION, WAKE, Conversation, ends_sentence, has_content,  # noqa: E402
+                   question_pending, route)
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -395,6 +396,7 @@ def handle_event(mid: int, event: str, data: dict):
                                         mid, who, start, text):
             return  # Recall re-delivered a webhook: storing (and answering) it twice would be wrong
         addressed = is_addressed(text)
+        conv(mid).punctuated = conv(mid).punctuated or text.rstrip().endswith((".", "।"))  # statements end in "."
         db.execute("INSERT INTO utterances (meeting_id,speaker,text,ts,addressed) VALUES (?,?,?,?,?)",
                    mid, who, text, start, int(addressed))
         publish("transcript", mid, {"speaker": who, "text": text, "ts": start, "addressed": addressed})
@@ -476,6 +478,8 @@ def interrupts(words: list[dict]) -> bool:
     return spoken >= BARGE_IN_SEC
 RECORD_CMD = re.compile(r"\b(stop|pause|halt|start|resume|restart|continue|unpause)\b\W+(?:\w+\W+){0,2}?"
                         r"(recording|record)\b", re.I)
+LEAVE = re.compile(r"\b(leave|exit|drop off|drop out of|get out of|quit)\b\W+(?:\w+\W+){0,2}?(meet|meeting|call)\b"
+                   r"|\byou can (go|leave)( now)?\W*$|मीटिंग (छोड़|से जाओ|से निकल)", re.I)
 GO_AHEAD = re.compile(r"\b(go ahead|what is it|what's that|you had a question|your question|raised your hand|"
                       r"(do )?you have a (question|doubt)|hand (is )?(up|raised)|bolo|boliye|puchho|poochho|"
                       r"speak up|you wanted to say)\b"
@@ -529,7 +533,7 @@ def on_speech(mid: int, speaker: str, text: str, addressed: bool, why: str = "",
     else:  # start, queue: a new question (a queued one waits for the answer being spoken: voice lock)
         q = {"parts": []}
     q["parts"].append(r.text)
-    delay = BARE_WAIT if question_pending(" ".join(q["parts"])) else DEBOUNCE
+    delay = BARE_WAIT if waiting_for_more(mid, " ".join(q["parts"])) else DEBOUNCE
     q["task"] = _spawn(_reply(mid, speaker, q, delay=delay, key=speaker))
     c.pending[speaker] = q
 
@@ -558,13 +562,28 @@ async def classify(mid: int, speaker: str, text: str):
         decided(mid, speaker, text, "ignore", "the model judged it wasn't for Amber")
 
 
+def waiting_for_more(mid: int, question: str) -> bool:
+    """Just "Amber," so far, or a sentence the ASR left unpunctuated ("So, Amber, I wondered what was"): the rest
+    is coming, so wait BARE_WAIT, not DEBOUNCE (live: she answered the half with "Yes, I'm listening" and the rest
+    was lost). Deepgram punctuates finished sentences; typed and replayed lines often have none, so spoken only."""
+    return question_pending(question) or (conv(mid).punctuated and not ends_sentence(question))
+
+
 def names_someone_else(mid: int, speaker: str, text: str) -> bool:
     """ "Priya, please close the PPE order" is for Priya, even right after the speaker asked Amber something."""
     people = db.rows("SELECT name FROM participants WHERE meeting_id=? UNION SELECT name FROM attendees WHERE meeting_id=?",
                      mid, mid)
     me = speaker.split(" ")[0].lower()
     firsts = {p["name"].split(" ")[0].lower() for p in people if p["name"]} - {me, "amber", "unknown", ""}
-    return bool(firsts & set(re.findall(r"[a-z]+", text.lower())))
+    # Said TO them: name first ("Rahul, please...", "so Priya can you...") or set off by a comma ("thanks, Priya").
+    # A mention isn't ("...what we discussed with Abhishek last time" was ignored live as "for Abhishek"). The ASR
+    # misspells names ("do you want to talk, Abhisheet?"), so they match by sound too.
+    low = text.lower()
+    said = set(re.findall(r"^\W*(?:(?:hey|hi|ok|okay|so|and|also|haan|acha)\W+)?([a-z]+)", low)
+               + re.findall(r"(?:^|[.?!]\s*)(?:(?:hey|hi|ok|okay|so|and|also)\W+)?([a-z]+)\s*,", low)  # "x," opening a
+               + re.findall(r",\s*([a-z]+)\W*$", low))  # sentence, or ", x" at the end ("and Rahul, tell me": no)
+    return any(f in said or (len(f) >= 4 and any(len(w) >= 4 and SequenceMatcher(None, w, f).ratio() >= 0.8
+                                                 for w in said)) for f in firsts)
 
 
 def still_talking(mid: int, speaker: str):
@@ -573,7 +592,7 @@ def still_talking(mid: int, speaker: str):
     q = conv(mid).pending.get(speaker)
     if q and not q.get("generating"):
         q["task"].cancel()
-        delay = BARE_WAIT if question_pending(" ".join(q["parts"])) else DEBOUNCE
+        delay = BARE_WAIT if waiting_for_more(mid, " ".join(q["parts"])) else DEBOUNCE
         q["task"] = _spawn(_reply(mid, speaker, q, delay=delay, key=speaker))
 
 
@@ -609,6 +628,9 @@ def command(mid: int, who: str, text: str, via_chat: bool = False) -> bool:
     """Things Amber does rather than answers. True if `text` was one."""
     if m := RECORD_CMD.search(text):
         _spawn(record_command(mid, m.group(1).lower() in ("stop", "pause", "halt"), via_chat))
+        return True
+    if LEAVE.search(text):  # asked for 4 times live and refused: now she goes (recap follows, as with Stop)
+        _spawn(leave_meeting(mid, via_chat))
         return True
     if GO_AHEAD.search(text) and (pc := open_confirmation(mid)):
         # Permission given: ask out loud (short spoken form), so the hand's chat fallback is no longer needed.
@@ -662,6 +684,12 @@ async def record_command(mid: int, pause: bool, via_chat: bool):
         await amber_chat(mid, "Recording paused. Type 'Amber, resume recording' here to resume.")
 
 
+async def leave_meeting(mid: int, via_chat: bool):
+    await say(mid, "Okay, I'll leave now. The recap will be in your inbox shortly. Bye!", via_chat)
+    await asyncio.sleep(max(0, speaking_until.get(mid, 0) - time.monotonic()) + 0.5)  # let the goodbye finish
+    await stop(mid)
+
+
 async def say(mid: int, text: str, via_chat: bool = False):
     if via_chat:
         await amber_chat(mid, text)
@@ -691,6 +719,7 @@ async def stream_speech(mid: int, text: str):
     """Speak through the page: forward PCM as ElevenLabs makes it (first sound ~0.4 s, no clip upload)."""
     turn, start, sent = interrupted.get(mid, 0), time.monotonic(), 0
     speaking_until[mid] = start + 1.0  # until the first chunk arrives; barge-in works from the start
+    await media_send(mid, {"type": "begin"})  # a new utterance: the gap before it isn't an underrun
     try:
         async for chunk in voice.tts_stream(text):
             if interrupted.get(mid, 0) != turn or not await media_send(mid, chunk):
@@ -727,8 +756,13 @@ async def media_ws(ws: WebSocket):
     db_hand = (db.meeting_detail(mid) or {}).get("hand_raised")
     await media_send(mid, {"type": "hand", "on": bool(db_hand)})
     try:
-        while (await ws.receive())["type"] != "websocket.disconnect":
-            pass
+        while (msg := await ws.receive())["type"] != "websocket.disconnect":
+            with suppress(ValueError, TypeError, KeyError):
+                if (m := json.loads(msg.get("text") or "{}")).get("type") == "underrun":
+                    # Her audio ran dry mid-sentence on the bot (an audible gap). Logged so we can tell slow
+                    # delivery (TTS / network) from playback trouble; the page has already raised its buffer.
+                    print(f"[media] meeting {mid}: underrun, chunk {m.get('late')}s late (buffer was {m.get('lead')}s)")
+                    publish("amber.underrun", mid, {"late": m.get("late"), "lead": m.get("lead")})
     except WebSocketDisconnect:
         pass
     finally:
@@ -780,6 +814,7 @@ async def _play_filler(mid: int, kind: str):
     try:
         if mid in media_sockets:  # streaming page
             pcm = await voice.filler_pcm(text)
+            await media_send(mid, {"type": "begin"})
             await media_sockets[mid].send_bytes(pcm)
             filler_until[mid] = speaking_until[mid] = time.monotonic() + len(pcm) / PCM_BPS
         elif bot := _real_bot(mid):
@@ -871,8 +906,10 @@ async def _answer(mid: int, speaker: str, q: dict, delay: float, via_chat: bool)
         await speak(mid, text, mp3 or b"", wait=not q.get("filler"))
         # They may follow up without her name until FOLLOWUP s after she stops talking. After just her name
         # ("Amber?" -> "Yes?") their next line is the question, even without a question word.
+        # Only a bare name counts ("Amber?"); a real question that ends with her name ("...to my teammate, Amber?")
+        # got a real answer, so "Okay. Fine." after it is not the next question (it was, live).
         conv(mid).followups[speaker] = (max(speaking_until.get(mid, 0), time.monotonic()) + FOLLOWUP,
-                                        question_pending(question))
+                                        not has_content(question))
     latency = {"llm": round(t_llm - t0, 2), "tts": round(t_tts - t_llm, 2), "total": round(time.perf_counter() - t0, 2)}
     print(f"[amber] {speaker}: {question!r} -> {text!r} {latency}")
     publish("amber.reply", mid, {"to": speaker, "question": question, "text": text,

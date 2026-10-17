@@ -45,13 +45,19 @@
 <script>
   const params = new URLSearchParams(location.search);
   const RATE = 16000;
-  const LEAD = Number(params.get("lead") || 0.3);  // jitter buffer, seconds (calibration knob: ?lead=0.5)
-  const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RATE });
+  // Jitter buffer, seconds: starts small (fast first word) and doubles after each underrun, up to MAX_LEAD, so a
+  // bursty stream settles after one hiccup instead of stuttering all the way through. ?lead= sets the start.
+  let lead = Number(params.get("lead") || 0.3);
+  const MAX_LEAD = 1.5;
+  // "playback": the browser's larger, glitch-resistant output buffers (the bot's machine is small, no GPU).
+  const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RATE, latencyHint: "playback" });
+  let sock = null;
+  let fresh = true;          // next chunk starts a new utterance ("begin"): a gap before it is not an underrun
   let playhead = 0;          // when the next chunk starts, in ctx time
   let sources = [];          // scheduled chunks, so "stop" can cut them all
   let leftover = new Uint8Array(0);  // an odd trailing byte from a chunk boundary
   const statusEl = document.getElementById("status");
-  window.amberStats = { chunks: 0, seconds: 0, stops: 0, connected: false };  // read by the backend's UI check
+  window.amberStats = { chunks: 0, seconds: 0, stops: 0, underruns: 0, connected: false };  // read by the backend's UI check
 
   function setSpeaking(on) {
     document.body.classList.toggle("speaking", on);
@@ -74,7 +80,18 @@
     src.connect(ctx.destination);
     // Chunks arrive unevenly (ElevenLabs -> backend -> tunnel -> this page). Played the moment they land, every
     // late one leaves a gap: she stutters. After running dry, buffer LEAD seconds before playing again.
-    if (playhead < ctx.currentTime + 0.02) playhead = ctx.currentTime + LEAD;
+    const now = ctx.currentTime;
+    if (playhead < now + 0.02) {
+      // Ran dry mid-speech (the last chunk ended under 2 s ago): an underrun, i.e. an audible gap. Tell the
+      // backend (it logs why) and buffer more from now on.
+      if (!fresh && playhead > 0 && now - playhead < 2) {
+        amberStats.underruns += 1;
+        if (sock && sock.readyState === 1) sock.send(JSON.stringify({ type: "underrun", late: +(now - playhead).toFixed(3), lead }));
+        lead = Math.min(lead * 2, MAX_LEAD);
+      }
+      playhead = now + lead;
+    }
+    fresh = false;
     src.start(playhead);
     playhead += buf.duration;
     sources.push(src);
@@ -95,13 +112,14 @@
 
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}/ws/media?m=${params.get("m")}&token=${params.get("token") || ""}`);
+    const ws = sock = new WebSocket(`${proto}://${location.host}/ws/media?m=${params.get("m")}&token=${params.get("token") || ""}`);
     ws.binaryType = "arraybuffer";
     ws.onopen = () => { document.getElementById("offline").textContent = ""; amberStats.connected = true; };
     ws.onmessage = (e) => {
       if (typeof e.data !== "string") return play(new Uint8Array(e.data));
       const msg = JSON.parse(e.data);
       if (msg.type === "stop") stop();
+      if (msg.type === "begin") fresh = true;
       if (msg.type === "hand") {
         document.body.classList.toggle("hand-up", !!msg.on);
         if (!sources.length) statusEl.textContent = msg.on ? "Hand raised" : "Listening";

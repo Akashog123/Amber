@@ -11,6 +11,7 @@ os.environ["WEBHOOK_TOKEN"] = "t"
 from fastapi.testclient import TestClient  # noqa: E402
 
 import asyncio  # noqa: E402
+import json  # noqa: E402
 import time  # noqa: E402
 
 import brain  # noqa: E402
@@ -401,7 +402,7 @@ say(d["bot_id"], "Akash", "What about Amber? Who owns the chiller service")
 time.sleep(0.25)
 say(d["bot_id"], "Akash", "contract?")
 time.sleep(1.2)
-assert asked[-1] == "What about Amber? Who owns the chiller service contract?" and len(set(asked)) == 2, asked
+assert asked == ["What about Amber? Who owns the chiller service contract?"], asked  # waited for the cut sentence
 brain.answer = fake_answer
 
 # Recording requests the phrase list misses are caught by the answer model's action token.
@@ -473,7 +474,13 @@ os.environ["ELEVENLABS_API_KEY"] = "stub"
 with c.websocket_connect(f"/ws/media?m={D}&token=t") as page:
     assert page.receive_json() == {"type": "hand", "on": False}
     say(d["bot_id"], "Akash", "Amber, who owns the boiler?")
-    frames = [len(page.receive_bytes()) for _ in range(4)]
+    frames = []
+    while len(frames) < 4:  # audio frames; "begin" markers (text) mark each new utterance
+        m = page.receive()
+        if m.get("bytes"):
+            frames.append(len(m["bytes"]))
+        else:
+            assert json.loads(m["text"]) == {"type": "begin"}, m
     assert frames == [8000, 64000, 64000, 64000], frames  # filler, then the streamed answer
     words = [{"text": w, "start_timestamp": {"relative": i * 0.4}, "end_timestamp": {"relative": i * 0.4 + 0.35}}
              for i, w in enumerate("hold on one sec".split())]
@@ -485,8 +492,8 @@ with c.websocket_connect(f"/ws/media?m={D}&token=t") as page:
 import json  # noqa: E402
 
 
-def next_json(page):  # skip audio frames
-    while not (m := page.receive()).get("text"):
+def next_json(page):  # skip audio frames and "begin" markers
+    while not (m := page.receive()).get("text") or json.loads(m["text"]) == {"type": "begin"}:
         pass
     return json.loads(m["text"])
 
@@ -772,4 +779,31 @@ r = c.post(f"/api/meetings/{D}/attendees", json={"name": "Rahul", "email": "not-
 assert r.status_code == 400
 assert c.post(f"/api/meetings/{D}/attendees", json={"name": "Rahul", "email": "rahul@example.com"}).status_code == 200
 assert main._attendee_email(D, "Rahul") == "rahul@example.com"
+print("ok")
+
+# Only a name used to address someone makes a line "for them"; a mention doesn't (live: "...with Abhishek in the
+# last meet" was dropped as "addressed to someone else").
+assert main.names_someone_else(D, "Akash", "Abhishek, please send the quote")
+assert main.names_someone_else(D, "Akash", "so Priya can you check the PO")
+assert main.names_someone_else(D, "Akash", "send it today, Priya")
+assert not main.names_someone_else(D, "Akash", "what we discussed with Abhishek in the last meet")
+# A spoken line Deepgram left unpunctuated is unfinished: wait for the rest (live: "Amber. Can you" got an answer).
+main.conv(D).punctuated = True
+assert main.waiting_for_more(D, "So, Amber, I wondered what was") and main.waiting_for_more(D, "Amber. Can you")
+assert not main.waiting_for_more(D, "Amber, what's the ETA on the seals?") and main.waiting_for_more(D, "Amber,")
+main.conv(D).punctuated = False
+assert not main.waiting_for_more(D, "Amber what's the ETA")  # unpunctuated transcript: no full stop means nothing
+print("ok")
+assert main.names_someone_else(D, "Akash", "do you want to talk, Abhisheet?")  # misspelt by the ASR, still him
+assert not main.names_someone_else(D, "Akash", "Okay, so what's the status?")  # "okay," / "so" aren't names
+print("ok")
+
+# "Amber, leave the meeting": she says goodbye and leaves; the recap follows like the dashboard's Stop.
+assert main.LEAVE.search("Amber, can you leave this meet") and main.LEAVE.search("Amber, please exit the call")
+assert main.LEAVE.search("ok Amber, you can go now") and not main.LEAVE.search("Amber, when do we leave for the site?")
+lv = c.post("/api/meetings/dispatch", json={"title": "leave", "url": "https://meet.google.com/l", "replay": True}).json()
+say(lv["bot_id"], "Akash", "Amber, please leave the meeting")
+time.sleep(1.5)
+assert replies(lv["id"])[0][-1].startswith("Okay, I'll leave now")
+assert c.get(f"/api/meetings/{lv['id']}").json()["status"] in ("ended", "done", "processing", "completed")
 print("ok")
