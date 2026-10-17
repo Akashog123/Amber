@@ -471,6 +471,7 @@ with c.websocket_connect(f"/ws/media?m={D}&token=t") as page:
     c.post("/webhooks/recall?token=t", json={"event": "transcript.partial_data", "data": {
         "data": {"words": words, "participant": {"name": "Priya"}}, "bot": {"id": d["bot_id"]}}}).raise_for_status()
     assert page.receive_json() == {"type": "stop"}
+    assert main.conv(D).followups["Akash"][0] > time.monotonic()  # a streamed answer still opens the follow-up window
 assert c.get("/media/amber").status_code == 200 and "amberStats" in c.get("/media/amber").text
 assert c.get("/media/amber", headers={"cf-connecting-ip": "1.2.3.4"}).status_code == 200  # Recall loads it via the tunnel
 os.environ["ELEVENLABS_API_KEY"] = ""

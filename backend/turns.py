@@ -113,8 +113,9 @@ def route(conv: Conversation, speaker: str, text: str, addressed: bool, names_ot
         if standalone:
             return Route("start", "follow-up, no name needed", text, cancel)
         return Route("classify", "unclear line right after she answered them", text, cancel)
-    if now < conv.spoke_until and standalone:
-        return Route("classify", "someone else's question right after Amber spoke", text, cancel)
+    if now < conv.spoke_until and (standalone or CORRECTION.search(text)) and not names_other:
+        # "and the booster pump?" / "actually, I mean the centrifugal pump" from another person, just after she spoke
+        return Route("classify", "someone else's question or correction right after Amber spoke", text, cancel)
     return Route("ignore", "no name, nothing open", text, cancel)
 
 
