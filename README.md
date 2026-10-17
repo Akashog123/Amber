@@ -53,8 +53,8 @@ Notes:
 - Meet guests must be admitted by the host; Workspace meetings may block guests.
 - `AMBER_DEMO_REMINDER_MINUTES=2` sends reminders 2 minutes after the call (demo);
   leave it empty to remind 24 h before each due date.
-- While recording is paused Recall sends no transcript, so Amber can't hear
-  "resume": resume from the chat or the dashboard.
+- While recording is paused Recall may stop the live transcript, so resume from
+  the chat ("Amber, resume recording") or the dashboard; not yet verified live.
 
 ## Product model
 

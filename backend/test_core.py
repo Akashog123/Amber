@@ -333,7 +333,7 @@ assert "resume recording" in replies(D)[1][-1]["text"]
 c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "Priya", "Amber, resume recording")).raise_for_status()
 time.sleep(0.3)
 assert db.row("SELECT recording_paused FROM meetings WHERE id=?", D)["recording_paused"] == 0
-assert replies(D)[1][-1]["text"].startswith("Recording resumed")
+assert replies(D)[1][-1]["text"] == "Recording resumed."
 assert c.post(f"/api/meetings/{D}/recording/pause").json() == {"paused": True}
 assert c.post(f"/api/meetings/{D}/recording/explode").status_code == 404
 c.post(f"/api/meetings/{D}/recording/resume")
@@ -408,6 +408,14 @@ n_q = db.row("SELECT COUNT(*) n FROM pending_confirmations WHERE meeting_id=?", 
 asyncio.run(main.apply_extraction(D, {"record_notes": [pump_note]}))
 asyncio.run(main.apply_extraction(D, {"record_notes": [pump_note]}))
 assert db.row("SELECT COUNT(*) n FROM pending_confirmations WHERE meeting_id=?", D)["n"] == n_q + 1
+c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "Akash", "neither")).raise_for_status()
+time.sleep(0.2)
+
+# No quote from the model: the note text is checked instead, so a confident guess still can't auto-write.
+before = db.row("SELECT COUNT(*) n FROM record_notes")["n"]
+asyncio.run(main.apply_extraction(D, {"record_notes": [{"record_id": "PO-1041", "confidence": 0.95,
+                                                        "candidates": ["PO-1041"], "note": "Grundfos pump delayed"}]}))
+assert db.row("SELECT COUNT(*) n FROM record_notes")["n"] == before and main.open_confirmation(D)
 c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "Akash", "neither")).raise_for_status()
 time.sleep(0.2)
 

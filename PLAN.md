@@ -263,7 +263,7 @@ All five PDF stages and every Tier 2 item are built and verified live or by repl
 | 4 | Task logging + verbal progress | Done (extraction pass; updates go on existing tasks). |
 | 5 | Series memory | Done: meetings of one meet type share `series_id`; the last 3 MOMs (summary, decisions, open questions) and open tasks are in Amber's context. |
 | 6 | Past meetings dashboard + recording | Done: recap view plays the Recall video (`/api/meetings/{id}/recording` fetches a fresh pre-signed link). |
-| 7 | Voice-commanded recording | Done as pause/resume (one continuous file). Paused = no transcript, so resume is by chat or dashboard. |
+| 7 | Voice-commanded recording | Done as pause/resume (one continuous file). Resume by chat or dashboard always works; whether Recall keeps transcribing while paused is unverified (LIVE_TESTS L2). |
 | 8 | Raise hand | Done as chat ✋ + dashboard banner; "Amber, go ahead" makes her ask aloud. No badge on her video tile (needs Output Media). |
 | 9 | Screen vision | Done on demand (`AMBER_SCREEN_VISION=1`): latest screen-share frame is sent with screen questions. Not continuous slide narration. |
 | 10 | <100 ms barge-in | Not claimed. Amber stops when someone talks (partials → `DELETE output_audio`, ~0.5–1 s). |

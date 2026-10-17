@@ -579,10 +579,10 @@ async def record_command(mid: int, pause: bool, via_chat: bool):
     else:
         try:
             await set_recording(mid, pause)
-            # While paused Recall sends no transcript, so Amber can't hear "resume": point people at the chat.
-            msg = ("Okay, recording paused. I can't hear the call while it's paused, so type "
-                   "'Amber, resume recording' in the chat when you want me back." if pause else
-                   "Recording resumed, I'm listening again.")
+            # Recall may stop the live transcript while paused (chat events keep coming), so the chat is the
+            # resume path that always works; a spoken "resume" also works if the transcript keeps flowing.
+            msg = ("Okay, recording paused. To resume, type 'Amber, resume recording' in the chat." if pause else
+                   "Recording resumed.")
         except HTTPException as e:
             print(f"[amber] {e.detail}")
             msg = "Sorry, I couldn't change the recording just now."
@@ -835,7 +835,7 @@ async def apply_extraction(mid: int, r: dict):
         rid = str(n.get("record_id") or "").strip().upper()
         alts = n.get("candidates") if isinstance(n.get("candidates"), list) else []
         cands = [c for c in dict.fromkeys([rid, *(str(a).strip().upper() for a in alts)]) if c in records]
-        spoken = which_records(n.get("quote") or "", records)
+        spoken = which_records(n.get("quote") or n.get("note") or "", records)  # no quote: judge the note
         if len(spoken) > 1 and (set(spoken) & set(cands) or not cands):
             cands = ([c for c in cands if c in spoken] + [s for s in spoken if s not in cands])[:3]
             conf = min(max(conf, CONFIRM_MIN), AUTO_WRITE - 0.01)  # the words are ambiguous: ask, don't write
