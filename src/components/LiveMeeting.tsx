@@ -28,6 +28,12 @@ function describe(event: AmberEvent): Omit<Activity, "id" | "at"> | null {
       return { kind: "error", text: "Couldn't answer", detail: String(d.error ?? "") }
     case "confirmation.asked":
       return { kind: "ask", text: String(d.question), detail: "waiting for a reply in chat" }
+    case "amber.decision": // the "why" log: what Amber did with a line and the reason
+      return {
+        kind: d.action === "ignore" ? "skip" : "turn",
+        text: `${d.speaker}: “${d.text}”`,
+        detail: `${d.action === "ignore" ? "not for Amber" : d.action} · ${d.why}`,
+      }
     case "amber.hand_raised":
       return { kind: "ask", text: "Raised hand: has a question about a record", detail: "says it aloud if invited (“Amber, go ahead”)" }
     case "recording.paused":
@@ -56,6 +62,8 @@ const badge: Record<string, string> = {
   note: "bg-[#edf7f1] text-[#2c8d61]",
   task: "bg-[#f0edff] text-[#6a62e8]",
   yield: "bg-[#f1f4f8] text-[#53617a]",
+  turn: "bg-[#eef6ff] text-[#4974ce]",
+  skip: "bg-[#f6f7f9] text-[#8792a8]",
   error: "bg-[#fff1f1] text-[#c04d4d]",
 }
 
@@ -155,7 +163,7 @@ export default function LiveMeeting({
           {statusLabel(meeting.status)}
           {scheduled && meeting.join_at && ` · joins ${new Date(meeting.join_at).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}`}
         </span>
-        {live && meeting.status === "in_call_recording" && (
+        {live && (meeting.status === "in_call_recording" || Boolean(meeting.recording_paused)) && (
           <button
             className="flex items-center gap-2 rounded-full border border-[#dce5f2] px-4 py-2 text-sm font-bold text-[#43516c] hover:bg-[#f5f8fd]"
             type="button"

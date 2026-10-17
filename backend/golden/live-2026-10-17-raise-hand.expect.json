@@ -1,0 +1,12 @@
+{
+ "_about": "Live rehearsal 2026-10-17, K1-L1: an ambiguous Grundfos update raises Amber's hand; 'go ahead' makes her ask aloud; the reply comes without her name ('But it's the two', missed live before the answer-window fix).",
+ "extract": [
+  {"after": "Grundfos shipment", "result": {"record_notes": [
+   {"record_id": "PO-1046", "note": "Shipment delayed by about three weeks", "confidence": 0.6,
+    "candidates": ["PO-1046", "PO-1041"], "quote": "the Grundfos shipment got pushed out by around three weeks"}]}}
+ ],
+ "confirmed": ["PO-1041"],
+ "answers": [],
+ "never": ["Go ahead", "stop the recording", "Grundfos", "use case"],
+ "max_answers": 1
+}

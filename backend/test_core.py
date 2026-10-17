@@ -286,7 +286,7 @@ async def broken_answer(mid, speaker, question, screen_png=None):
 brain.answer = broken_answer
 say(d["bot_id"], "Akash", "Amber, what's the status of the VFD drives?")
 assert replies(d["id"])[0][-1] == brain.SORRY
-assert not [k for k in main.pending if k[0] == d["id"]]  # nothing left behind to leak into the next question
+assert not main.conv(d["id"]).pending  # nothing left behind to leak into the next question
 brain.answer = fake_answer
 
 # --- Edge cases found in the final audit ---
@@ -464,7 +464,7 @@ assert asked == [], asked
 
 # Follow-up window: a question needs no "Amber", but a line naming someone else is for them.
 asked.clear()
-main.followup[D] = ("Akash", time.monotonic() + 10)
+main.conv(D).followups["Akash"] = (time.monotonic() + 10, False)
 say(d["bot_id"], "Akash", "Rahul, please send the quote by Friday.")
 time.sleep(0.4)
 assert asked == [], asked

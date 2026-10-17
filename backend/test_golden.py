@@ -18,6 +18,7 @@ os.environ["WEBHOOK_TOKEN"] = "t"
 import asyncio  # noqa: E402
 import json  # noqa: E402
 import time  # noqa: E402
+import db  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -32,6 +33,7 @@ ANSWER_SEC = 3.0  # real question-end -> reply time on live calls (model + voice
 MAX_GAP = 12.0    # seconds of call time
 REPLY_AUDIO = 4.0   # seconds a typical spoken answer lasts (she's "speaking" this long: barge-in, follow-up window)
 FILLER_AUDIO = 0.8
+classified: list[tuple[str, str]] = []  # unclear lines sent to the model (each is an extra LLM call)
 
 
 def silence(secs: float) -> bytes:
@@ -62,16 +64,33 @@ def at(event: dict) -> float:
     return (d.get("timestamp") or {}).get("relative") or 0
 
 
-def replay(events: list[dict]) -> list[tuple[str, str]]:
+def replay(events: list[dict], extract_script: list[dict] = ()) -> tuple[list[tuple[str, str]], list[str]]:
+    """Returns (answered questions, records a person confirmed). extract_script: what the extraction model
+    "finds" once a line containing `after` has been said, e.g. an ambiguous record note."""
     answered: list[tuple[str, str]] = []
+    script = list(extract_script)
 
     async def stub_answer(mid, speaker, question, screen_png=None):
         await asyncio.sleep(ANSWER_SEC / SPEED)
         answered.append((speaker, question))  # only answers that weren't cancelled/restarted along the way
         return "ok"
 
+    async def stub_extract(mid, after):
+        new = db.rows("SELECT id, text FROM utterances WHERE meeting_id=? AND id>? AND speaker!='Amber'", mid, after)
+        hit = next((s for s in script if any(s["after"].lower() in u["text"].lower() for u in new)), None)
+        if hit:
+            script.remove(hit)
+        return (hit or {}).get("result", {}), (new[-1]["id"] if new else after)
+
     brain.answer = stub_answer
-    brain.extract = lambda mid, after: asyncio.sleep(0, ({}, after))
+    brain.extract = stub_extract
+    classified.clear()
+
+    async def stub_is_for_amber(mid, speaker, line):  # conservative: unclear lines aren't for her
+        classified.append((speaker, line))
+        return False
+
+    brain.is_for_amber = stub_is_for_amber
     voice.tts = lambda text, model=None: asyncio.sleep(0, silence(REPLY_AUDIO))
     voice.filler_mp3 = lambda text: asyncio.sleep(0, silence(FILLER_AUDIO))
     voice.warm_fillers = lambda: asyncio.sleep(0)
@@ -94,16 +113,21 @@ def replay(events: list[dict]) -> list[tuple[str, str]]:
             e["data"]["bot"] = {"id": bot}
             c.post("/webhooks/recall?token=t", json=e).raise_for_status()
         time.sleep((ANSWER_SEC + main.BARE_WAIT * SPEED + 1) / SPEED + 0.5)
+        mid = db.row("SELECT id FROM meetings WHERE bot_id=?", bot)["id"]
     for name in ("DEBOUNCE", "BARE_WAIT", "FOLLOWUP"):
         setattr(main, name, getattr(main, name) * SPEED)
-    return answered
+    confirmed = [n["record_id"] for n in db.rows(
+        "SELECT record_id FROM record_notes WHERE meeting_id=? AND confidence=1.0 ORDER BY id", mid)]
+    return answered, confirmed
 
 
 def check(name: str) -> list[str]:
     events = [json.loads(line) for line in (DIR / f"{name}.jsonl").read_text(encoding="utf-8").splitlines()]
     expect = json.loads((DIR / f"{name}.expect.json").read_text(encoding="utf-8"))
-    answered = replay(events)
+    answered, confirmed = replay(events, expect.get("extract", []))
     problems, i = [], 0
+    if "confirmed" in expect and confirmed != expect["confirmed"]:
+        problems.append(f"records confirmed {confirmed}, expected {expect['confirmed']}")
     for want in expect["answers"]:  # in order, each matched by a later answer than the previous one
         j = next((j for j in range(i, len(answered)) if answered[j][0] == want["speaker"]
                   and want["has"].lower() in answered[j][1].lower()), None)
@@ -125,7 +149,7 @@ def add(log: str, name: str):
     raw = [json.loads(line) for line in Path(log).read_text(encoding="utf-8").splitlines()]
     events = [t for t in map(trim, raw) if t]
     (DIR / f"{name}.jsonl").write_text("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in events), "utf-8")
-    answered = replay(json.loads(json.dumps(events)))
+    answered, _ = replay(json.loads(json.dumps(events)))
     draft = {"answers": [{"speaker": s, "has": q} for s, q in answered], "never": [], "max_answers": len(answered)}
     path = DIR / f"{name}.expect.json"
     if not path.exists():
@@ -143,7 +167,9 @@ if __name__ == "__main__":
     for f in sorted(DIR.glob("*.expect.json")):
         name = f.name.removesuffix(".expect.json")
         problems = check(name)
-        print(f"{name}: {'ok' if not problems else 'FAILED'}")
+        print(f"{name}: {'ok' if not problems else 'FAILED'} ({len(classified)} unclear lines sent to the model)")
+        for s, line in classified:
+            print(f"    classify: {s}: {line}")
         for p in problems:
             print("  " + p)
         failed |= bool(problems)

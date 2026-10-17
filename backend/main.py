@@ -29,6 +29,7 @@ import brain  # noqa: E402
 import mailer  # noqa: E402
 import seed  # noqa: E402
 import voice  # noqa: E402
+from turns import CANCEL, CORRECTION, HINDI, QUESTION, WAKE, Conversation, has_content, route  # noqa: E402
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -41,9 +42,6 @@ app = FastAPI(title="Amber Live", lifespan=lifespan)
 seed.seed()  # creates tables + mock records; idempotent
 WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN", "")
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
-# ASR often mishears the name; chat may also start with "@Amber". Hindi transcripts may spell it in Devanagari.
-WAKE = re.compile(r"\b(amber|ember|amba|ambar|umber)\b|अंबर|अम्बर|एम्बर|ऐम्बर", re.I)
-HINDI = re.compile(r"[ऀ-ॿ]|\b(kya|kaun|kab|kahan|kitna|kitne|batao|bataiye|hai|hain|karo|kijiye)\b", re.I)
 # The public tunnel exists for Recall's webhooks only; the operator API stays local (the dashboard proxies to it).
 PUBLIC_PATHS = ("/webhooks/", "/ws/")
 
@@ -69,8 +67,6 @@ def publish(type_: str, meeting_id: int | None, data: dict):
         q.put_nowait(msg)
 
 
-QUESTION = re.compile(r"\b(can you|could you|would you|tell me|what|what's|who|whose|when|where|how|which|"
-                      r"why|is there|are there|do we|did we|status|update|please|give me|check)\b", re.I)
 _soundex_tail = brain.soundex_tail  # "amber" -> "516"; v sounds like b, so "i'm very" -> "516"
 
 def is_addressed(text: str) -> bool:
@@ -307,9 +303,10 @@ def _set_status(mid: int, status: str):
 
 def forget(mid: int):
     """Drop a finished meeting's live-call state (pending questions, playback clocks, screen frames)."""
-    for key in [k for k in pending if k[0] == mid]:
-        pending.pop(key)["task"].cancel()
-    for d in (filler_until, speaking_until, followup, since_extract, screens, voice_locks, invited):
+    for q in (convs.pop(mid, None) or Conversation()).pending.values():
+        if q.get("task"):
+            q["task"].cancel()
+    for d in (filler_until, speaking_until, since_extract, screens, voice_locks):
         d.pop(mid, None)
 
 
@@ -397,7 +394,8 @@ def handle_event(mid: int, event: str, data: dict):
         # "Amber, the first one" / "PO-1046" may answer her confirmation question instead of asking a new one.
         if addressed and command(mid, who, text):
             pass
-        elif not ((addressed or RECORD_ID.search(text)) and resolve_confirmation(mid, who, text)):
+        elif not ((addressed or RECORD_ID.search(text) or time.monotonic() < conv(mid).record_answer_until)
+                  and resolve_confirmation(mid, who, text)):
             on_speech(mid, who, text, addressed)
         maybe_extract(mid)
     elif event == "participant_events.join":
@@ -426,20 +424,17 @@ def handle_event(mid: int, event: str, data: dict):
 
 
 # --- live answering ----------------------------------------------------------
-# Amber speaks only when addressed. The asker's question is buffered until they stop
-# talking for DEBOUNCE seconds; if they keep talking (rephrasing, changing their mind)
-# the pending answer is cancelled and rebuilt from everything they said.
+# Amber speaks only when spoken to. Who she's talking with and what she's waiting for lives in one Conversation
+# per meeting (turns.py); every line is routed against it there. A question is buffered until the asker stops
+# talking for DEBOUNCE seconds; if they keep talking the pending answer is rebuilt from everything they said.
 DEBOUNCE = float(os.getenv("AMBER_DEBOUNCE", "0.7"))
 BARE_WAIT = float(os.getenv("AMBER_BARE_WAIT", "2.0"))  # just "Amber" so far: wait longer for the question
 FILLER_OVERLAP = float(os.getenv("AMBER_FILLER_OVERLAP", "0.3"))  # start the answer this early (Recall lag)
-_NOISE = {"hey", "hi", "hello", "ok", "okay", "so", "um", "uh", "yo", "and", "amber"}
 NO_FILLER = re.compile(r"\b(are you there|you there|can you hear me|hear me|audible|how are you|thank|thanks|"
                        r"good morning|who are you|who made you|who built you|what are you)\b", re.I)
 LOOKUP = re.compile(r"\b(status|orders?|ordered|owns?|owner|who|when|where|records?|po|deliver\w*|inspection|"
                     r"contracts?|eta|arriv\w*|budget|agenda|update|discuss\w*|said|say|how many|which|tasks?|due)\b",
                     re.I)
-CORRECTION = re.compile(r"\b(actually|i mean|sorry|instead|rather|wait)\b", re.I)
-CANCEL = re.compile(r"\b(never ?mind|forget (it|about (it|that)|that)|cancel that|scratch that|no worries)\b", re.I)
 STOP_WORDS = re.compile(r"^(no|stop|wait|hold|amber|रुको|रुकिए)\W*$", re.I)
 BARGE_IN_SEC = float(os.getenv("AMBER_BARGE_IN_SEC", "0.7"))  # this much continuous speech = an interruption
 
@@ -463,13 +458,16 @@ SCREEN = re.compile(r"\b(screen|slides?|shared|sharing|showing|shown|chart|graph
 SCREEN_FRESH = 120  # seconds a screen-share frame stays usable
 screens: dict[int, tuple[str, float]] = {}  # meeting -> (latest screen-share PNG, base64; monotonic time)
 voice_locks: dict[int, asyncio.Lock] = {}  # meeting -> serializes Amber's audio clips
-invited: dict[int, set[str]] = {}          # meeting -> speakers Amber just said "yes?" to
-pending: dict[tuple[int, str], dict] = {}  # (meeting, speaker) -> {"parts": [...], "task": Task}
 filler_until: dict[int, float] = {}         # meeting -> monotonic time the current filler finishes
 speaking_until: dict[int, float] = {}       # meeting -> monotonic time Amber's audio ends
 FOLLOWUP = float(os.getenv("AMBER_FOLLOWUP", "10"))  # seconds after a reply the asker can follow up
-followup: dict[int, tuple[str, float]] = {}  # meeting -> (last asker, follow-up window end)
+ANSWER_WINDOW = 30.0  # after asking her record question aloud, a bare spoken reply ("it's 2") counts
+convs: dict[int, Conversation] = {}  # meeting -> turn-taking state (turns.py)
 _tasks: set[asyncio.Task] = set()
+
+
+def conv(mid: int) -> Conversation:
+    return convs.setdefault(mid, Conversation())
 
 
 def _spawn(coro) -> asyncio.Task:
@@ -479,52 +477,54 @@ def _spawn(coro) -> asyncio.Task:
     return t
 
 
-def on_speech(mid: int, speaker: str, text: str, addressed: bool):
-    key = (mid, speaker)
-    q = pending.get(key)
-    in_flight = bool(q and (q.get("generating") or q.get("committed")))  # their answer is on its way
-    if q and q.get("committed"):
-        q = None  # that answer is already being spoken; anything new is a new question
-    if m := CANCEL.search(text):
-        if q:
-            q["task"].cancel()
-            pending.pop(key)
-            publish("amber.cancelled", mid, {"speaker": speaker})
-        # "Forget that. Amber, have we ordered the PPE kits?": drop the old question, keep the new one.
-        rest = text[m.end():].strip(" ,.!?")
-        if not (has_content(rest) and (WAKE.search(rest) or QUESTION.search(rest))):
-            return
-        text, addressed, q = rest, addressed or is_addressed(rest), None
-    who, until = followup.get(mid, ("", 0))
-    standalone = bool(QUESTION.search(text) or HINDI.search(text)) and not names_someone_else(mid, speaker, text)
-    asks = text.rstrip().endswith("?")
-    if q and q.get("generating"):
-        # Their answer is being prepared. What they say now is one of three things:
-        if CORRECTION.search(text) or (asks and not addressed and not standalone) or not has_content(" ".join(q["parts"])):
-            pass  # a correction, the tail of the same question ("...service" + "contract?"), or the actual
-            # question after just "Amber," (seen live: a 2.6 s pause, then "have we ordered the PPE kits"): merge
-        elif addressed or standalone:
-            # A new question: her name again ("Amber," + "have we ordered the PPE kits", seen live) or a question
-            # of its own ("and when does it arrive?"). The first answer finishes; this one queues behind it.
-            q, addressed = None, True
-        else:
-            return  # a statement: they've moved on, the answer stands
-    elif not addressed and (in_flight or (who == speaker and time.monotonic() < until)):
-        # Follow-up while/after Amber answers them: no need to say her name again. After a bare "Amber?" -> "Yes?"
-        # their next line is the question even without a question word ("have we ordered the PPE kits").
-        prompted = speaker in invited.get(mid, set()) and not names_someone_else(mid, speaker, text)
-        addressed = standalone or asks or prompted
-    if addressed:
-        invited.get(mid, set()).discard(speaker)
-    if not (addressed or q):
+def on_speech(mid: int, speaker: str, text: str, addressed: bool, why: str = ""):
+    c = conv(mid)
+    r = route(c, speaker, text, addressed, names_someone_else(mid, speaker, text), time.monotonic())
+    decided(mid, speaker, text, r.action, why or r.why)
+    old = c.pending.get(speaker)
+    if r.cancel and old:
+        old["task"].cancel()
+        c.pending.pop(speaker)
+        publish("amber.cancelled", mid, {"speaker": speaker})
+    if r.action == "ignore":
         return
-    if q:
-        q["task"].cancel()  # asker is still talking -> restart with the fuller question
-    q = q or {"parts": []}
-    q["parts"].append(text)
+    if r.action == "classify":
+        _spawn(classify(mid, speaker, r.text))
+        return
+    c.followups.pop(speaker, None)  # the follow-up (or "yes?") has been used
+    if r.action in ("append", "merge"):
+        q = c.pending[speaker]
+        q["task"].cancel()  # asker is still talking / corrected themselves -> restart with the fuller question
+    else:  # start, queue: a new question (a queued one waits for the answer being spoken: voice lock)
+        q = {"parts": []}
+    q["parts"].append(r.text)
     delay = DEBOUNCE if has_content(" ".join(q["parts"])) else BARE_WAIT
-    q["task"] = _spawn(_reply(mid, speaker, q, delay=delay, key=key))
-    pending[key] = q
+    q["task"] = _spawn(_reply(mid, speaker, q, delay=delay, key=speaker))
+    c.pending[speaker] = q
+
+
+QUIET = {"no name, nothing open"}  # not worth a line in the dashboard's "why" log
+
+
+def decided(mid: int, speaker: str, text: str, action: str, why: str):
+    """The "why" log: what Amber did with each line and the reason, for the dashboard and the server log."""
+    if why in QUIET:
+        return
+    print(f"[turn] {speaker}: {text!r} -> {action} ({why})")
+    publish("amber.decision", mid, {"speaker": speaker, "text": text, "action": action, "why": why})
+
+
+async def classify(mid: int, speaker: str, text: str):
+    """Unclear line while Amber is in a conversation with this speaker: let the model judge from context."""
+    try:
+        to_amber = await brain.is_for_amber(mid, speaker, text)
+    except Exception as e:  # model down: silence is the safe default for an unclear line
+        print(f"[turn] classify failed: {e!r}")
+        to_amber = False
+    if to_amber:
+        on_speech(mid, speaker, text, addressed=True, why="the model judged it was said to Amber")
+    else:
+        decided(mid, speaker, text, "ignore", "the model judged it wasn't for Amber")
 
 
 def names_someone_else(mid: int, speaker: str, text: str) -> bool:
@@ -539,17 +539,11 @@ def names_someone_else(mid: int, speaker: str, text: str) -> bool:
 def still_talking(mid: int, speaker: str):
     """A partial transcript from someone with a pending question: restart the wait, so Amber answers
     DEBOUNCE after their last word even when the ASR splits "Amber," and the question into separate finals."""
-    q = pending.get((mid, speaker))
+    q = conv(mid).pending.get(speaker)
     if q and not q.get("generating"):
         q["task"].cancel()
         delay = DEBOUNCE if has_content(" ".join(q["parts"])) else BARE_WAIT
-        q["task"] = _spawn(_reply(mid, speaker, q, delay=delay, key=(mid, speaker)))
-
-
-def has_content(text: str) -> bool:
-    """False for a bare "Amber" / "hey Amber": the actual question is probably still coming."""
-    words = re.sub(r"[^a-z' ]", " ", WAKE.sub(" ", text.lower())).split()
-    return any(w not in _NOISE for w in words)
+        q["task"] = _spawn(_reply(mid, speaker, q, delay=delay, key=speaker))
 
 
 def filler_kind(question: str) -> str | None:
@@ -576,6 +570,8 @@ def command(mid: int, who: str, text: str, via_chat: bool = False) -> bool:
     if GO_AHEAD.search(text) and (pc := open_confirmation(mid)):
         # Permission given: ask out loud (short spoken form; the chat keeps the full question).
         _spawn(say(mid, pc["question"].removeprefix("✋ ") if via_chat else spoken_question(pc), via_chat))
+        if not via_chat:
+            conv(mid).record_answer_until = time.monotonic() + ANSWER_WINDOW  # replies are "it's 2", not "Amber, two"
         return True
     return False
 
@@ -690,8 +686,9 @@ async def _reply(mid: int, speaker: str, q: dict, delay: float, via_chat=False, 
     finally:
         # Done or crashed: drop the pending question so its words don't leak into this speaker's next one.
         # (A restart replaced q["task"] with a newer task, which then owns the entry.)
-        if key and pending.get(key) is q and q.get("task") is asyncio.current_task():
-            pending.pop(key)
+        c = conv(mid)
+        if key and c.pending.get(key) is q and q.get("task") is asyncio.current_task():
+            c.pending.pop(key)
 
 
 async def _answer(mid: int, speaker: str, q: dict, delay: float, via_chat: bool):
@@ -730,9 +727,10 @@ async def _answer(mid: int, speaker: str, q: dict, delay: float, via_chat: bool)
             await q["filler"]  # never talk over our own "let me check"
             await asyncio.sleep(max(0, filler_until.get(mid, 0) - FILLER_OVERLAP - time.monotonic()))
         await speak(mid, text, mp3 or b"", wait=not q.get("filler"))
-        followup[mid] = (speaker, max(speaking_until.get(mid, 0), time.monotonic()) + FOLLOWUP)
-        if not has_content(question):  # she answered just her name ("Yes?"): the next line is for her
-            invited.setdefault(mid, set()).add(speaker)
+        # They may follow up without her name until FOLLOWUP s after she stops talking. After just her name
+        # ("Amber?" -> "Yes?") their next line is the question, even without a question word.
+        conv(mid).followups[speaker] = (max(speaking_until.get(mid, 0), time.monotonic()) + FOLLOWUP,
+                                        not has_content(question))
     latency = {"llm": round(t_llm - t0, 2), "tts": round(t_tts - t_llm, 2), "total": round(time.perf_counter() - t0, 2)}
     print(f"[amber] {speaker}: {question!r} -> {text!r} {latency}")
     publish("amber.reply", mid, {"to": speaker, "question": question, "text": text,
