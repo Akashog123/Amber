@@ -102,8 +102,12 @@ def keyterms(mid: int) -> list[str]:
     """Words the transcriber should expect: Amber's name first, then attendees, record IDs, names and owners."""
     terms = ["Amber"]
     terms += [a["name"] for a in db.rows("SELECT name FROM attendees WHERE meeting_id=?", mid)]
-    for r in db.rows("SELECT id, name, owner FROM records ORDER BY id"):
-        terms += [r["id"], r["name"], r["owner"]]
+    recs = db.rows("SELECT id, name, aliases, owner FROM records ORDER BY id")
+    terms += [r["id"] for r in recs]
+    # Aliases are how people actually say it ("pump seals" was heard as "pump sales"); names and owners next.
+    terms += [a for r in recs for a in (r["aliases"] or "").split(",")]
+    for r in recs:
+        terms += [r["name"], r["owner"]]
     return list(dict.fromkeys(t.strip() for t in terms if t and t.strip()))
 
 
@@ -387,8 +391,7 @@ def handle_event(mid: int, event: str, data: dict):
 
     if event == "transcript.partial_data":
         # A real interruption, not a cough or "mm": two words, or one long one ("Wait", "Stop" count too).
-        partial = " ".join(w.get("text", "") for w in inner.get("words") or []).split()
-        if len(partial) >= 2 or (partial and (len(partial[0]) >= 4 or STOP_WORDS.match(partial[0]))):
+        if interrupts(" ".join(w.get("text", "") for w in inner.get("words") or [])):
             yield_floor(mid)
         still_talking(mid, who)
     elif event == "transcript.data":
@@ -444,8 +447,19 @@ LOOKUP = re.compile(r"\b(status|orders?|ordered|owns?|owner|who|when|where|recor
                     r"contracts?|eta|arriv\w*|budget|agenda|update|discuss\w*|said|say|how many|which|tasks?|due)\b",
                     re.I)
 CORRECTION = re.compile(r"\b(actually|i mean|sorry|instead|rather|wait)\b", re.I)
-CANCEL = re.compile(r"\b(never ?mind|forget it|cancel that|scratch that|no worries)\b", re.I)
-STOP_WORDS = re.compile(r"^(no|stop|wait|hey|sorry|but)\W*$", re.I)
+CANCEL = re.compile(r"\b(never ?mind|forget (it|about (it|that)|that)|cancel that|scratch that|no worries)\b", re.I)
+STOP_WORDS = re.compile(r"^(no|stop|wait|hey|sorry|but|hold|amber)\W*$", re.I)
+BACKCHANNEL = {"yeah", "yes", "yep", "ok", "okay", "right", "sure", "hmm", "mm", "mhm", "uh", "um", "huh", "uh-huh",
+               "got", "it", "nice", "cool", "great", "fine", "true", "alright", "achha", "haan", "theek"}
+
+
+def interrupts(partial: str) -> bool:
+    """Someone talking over Amber, not a cough or a "yeah, okay" while she speaks."""
+    words = [w.strip(".,!?").lower() for w in partial.split()]
+    if any(STOP_WORDS.match(w) for w in words):
+        return True
+    real = [w for w in words if w and w not in BACKCHANNEL]
+    return len(real) >= 2 or any(len(w) >= 4 for w in real)
 RECORD_CMD = re.compile(r"\b(stop|pause|halt|start|resume|restart|continue|unpause)\b\W+(?:\w+\W+){0,2}?"
                         r"(recording|record)\b", re.I)
 GO_AHEAD = re.compile(r"\b(go ahead|what is it|what's that|you had a question|your question|raised your hand|"
@@ -475,20 +489,29 @@ def on_speech(mid: int, speaker: str, text: str, addressed: bool):
     q = pending.get(key)
     if q and q.get("committed"):
         q = None  # that answer is already being spoken; anything new is a new question
-    if CANCEL.search(text):
+    if m := CANCEL.search(text):
         if q:
             q["task"].cancel()
             pending.pop(key)
             publish("amber.cancelled", mid, {"speaker": speaker})
-        return
+        # "Forget that. Amber, have we ordered the PPE kits?": drop the old question, keep the new one.
+        rest = text[m.end():].strip(" ,.!?")
+        if not (has_content(rest) and (WAKE.search(rest) or QUESTION.search(rest))):
+            return
+        text, addressed, q = rest, addressed or is_addressed(rest), None
     who, until = followup.get(mid, ("", 0))
     if (not addressed and who == speaker and time.monotonic() < until and (QUESTION.search(text) or HINDI.search(text))
             and not names_someone_else(mid, speaker, text)):
         addressed = True  # follow-up to Amber's last answer; no need to say her name again
     if not (addressed or q):
         return
-    if q and q.get("generating") and not (addressed or CORRECTION.search(text)):
-        return  # answer already in flight; the asker moving on doesn't rewrite it
+    if q and q.get("generating"):
+        if not (addressed or CORRECTION.search(text)):
+            return  # answer already in flight; the asker moving on doesn't rewrite it
+        if not CORRECTION.search(text):
+            # Her name again mid-answer = a new question (seen live: "Amber," then "have we ordered the PPE kits"
+            # was folded into the chiller answer and lost). Let that answer finish; this one queues behind it.
+            q = None
     if q:
         q["task"].cancel()  # asker is still talking -> restart with the fuller question
     q = q or {"parts": []}

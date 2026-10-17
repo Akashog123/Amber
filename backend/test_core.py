@@ -353,6 +353,40 @@ say(d["bot_id"], "Rahul", "Amber, who owns the boiler?")
 time.sleep(0.8)
 assert sorted(screens_seen, key=bool) == [None, b"\x89PNG fake"], screens_seen
 
+# Barge-in: backchannel while Amber talks doesn't cut her off; a real interruption does.
+assert not main.interrupts("Yeah.") and not main.interrupts("okay okay") and not main.interrupts("mm")
+assert main.interrupts("wait") and main.interrupts("no no") and main.interrupts("what about the pump")
+assert main.interrupts("Actually")
+
+# Her name again while she's answering = a new question, not glued onto the old one (seen live).
+async def slow_answer(mid, speaker, question, screen_png=None):
+    asked.append(question)
+    await asyncio.sleep(0.5)
+    return f"answer to {speaker}"
+
+brain.answer = slow_answer
+asked.clear()
+say(d["bot_id"], "Akash", "Hey Amber, what's the status of Chiller two?")
+time.sleep(0.25)  # debounce fired, answer in flight
+say(d["bot_id"], "Akash", "Amber,")
+time.sleep(0.2)
+say(d["bot_id"], "Akash", "have we ordered the PPE kits")
+time.sleep(1.8)
+assert asked == ["Hey Amber, what's the status of Chiller two?", "Amber, have we ordered the PPE kits"], asked
+brain.answer = fake_answer
+
+# Cancel + new question in one breath (seen live): the old one is dropped, the new one answered.
+asked.clear()
+say(d["bot_id"], "Priya", "Amber, what's the boiler status")
+say(d["bot_id"], "Priya", "Sorry, forget about that. Amber, have we ordered the PPE kits?")
+time.sleep(0.5)
+assert asked == ["Amber, have we ordered the PPE kits"], asked
+asked.clear()
+say(d["bot_id"], "Priya", "Amber, what's the boiler status")
+say(d["bot_id"], "Priya", "oh forget it")
+time.sleep(0.5)
+assert asked == [], asked
+
 # Follow-up window: a question needs no "Amber", but a line naming someone else is for them.
 asked.clear()
 main.followup[D] = ("Akash", time.monotonic() + 10)
