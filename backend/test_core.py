@@ -80,12 +80,13 @@ assert m["status"] in ("done", "processing", "completed") and m["ended_at"], m["
 voice, chat = replies(mid)
 m = c.get(f"/api/meetings/{mid}").json()
 assert voice == ["answer to Akash", brain.FALLBACK], voice  # both spoken questions answered, in order
+chat = [x for x in chat if "I'm Amber, taking notes" not in x["text"]]  # her "type your email" asks to joiners
 assert len(chat) == 1 and chat[0]["text"] == "answer to Priya"  # chat question answered in chat
 assert len([u for u in m["transcript"] if u["speaker"] != "Amber"]) == sum(1 for s in replay.SCRIPT if s[1] == "say")
 assert sum(u["addressed"] for u in m["transcript"]) == 2
 assert {p["name"] for p in m["participants"]} == {"Akash", "Rahul", "Priya"}
 assert all(p["left_at"] for p in m["participants"])
-assert m["chat"][0]["sender"] == "Priya"
+assert [x for x in m["chat"] if not x["is_amber"]][0]["sender"] == "Priya"
 assert len(m["attendees"]) == 3
 assert len(c.get("/api/records").json()) == len(seed.RECORDS)
 # Speaker rephrases before the debounce fires -> one answer built from the whole question.
@@ -736,4 +737,39 @@ assert r_at.utcoffset() == _td(hours=5, minutes=30) and r_at.hour == 9 - int(mai
 os.environ["AMBER_TZ"] = "-04"
 assert db.team_tz().utcoffset(None) == -_td(hours=4)
 os.environ["AMBER_TZ"] = ""
+print("ok")
+
+# Recap to everyone in the call: a joiner with no email is asked once in chat; an email typed there joins the list.
+def join(who, email=None):
+    p = {"name": who, **({"email": email} if email else {})}
+    c.post("/webhooks/recall?token=t", json={"event": "participant_events.join", "data": {
+        "data": {"participant": p, "timestamp": {"absolute": db.now()}}, "bot": {"id": d["bot_id"]}}}).raise_for_status()
+
+
+def chat(who, text):
+    c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], time.monotonic(), "chat", who, text)).raise_for_status()
+    time.sleep(0.2)
+
+
+db.execute("INSERT INTO tasks (meeting_id, title, owner, status) VALUES (?, 'Send the vendor quote', 'Abhishek', 'open')", D)
+join("Abhishek Kumar")
+join("Abhishek Kumar")  # rejoined: asked once only
+time.sleep(0.2)
+asks = [t for t in amber_chats() if "Hi Abhishek" in t]
+assert len(asks) == 1, asks
+chat("Abhishek Kumar", "Send the quote to rahul@vendor.com once it's ready")  # about someone else: not him
+assert not main._attendee_email(D, "Abhishek Kumar")
+chat("Abhishek Kumar", "abhishek@example.com")
+assert main._attendee_email(D, "Abhishek Kumar") == "abhishek@example.com"
+assert amber_chats()[-1] == "Thanks, Abhishek. I'll send the recap to abhishek@example.com."
+assert db.row("SELECT owner_email FROM tasks WHERE meeting_id=? AND owner='Abhishek'", D)["owner_email"] == "abhishek@example.com"
+chat("Abhishek Kumar", "my email is ABHISHEK@example.com")  # same address again: no duplicate
+assert db.row("SELECT COUNT(*) n FROM attendees WHERE meeting_id=? AND lower(email)='abhishek@example.com'", D)["n"] == 1
+join("Priya Shah", "priya@example.com")  # Zoom/Teams can send the email with the join: no need to ask
+time.sleep(0.2)
+assert main._attendee_email(D, "Priya Shah") == "priya@example.com" and not any("Hi Priya" in t for t in amber_chats())
+r = c.post(f"/api/meetings/{D}/attendees", json={"name": "Rahul", "email": "not-an-email"})
+assert r.status_code == 400
+assert c.post(f"/api/meetings/{D}/attendees", json={"name": "Rahul", "email": "rahul@example.com"}).status_code == 200
+assert main._attendee_email(D, "Rahul") == "rahul@example.com"
 print("ok")

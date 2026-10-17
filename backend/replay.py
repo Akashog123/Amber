@@ -53,7 +53,7 @@ PIDS = {name: i + 100 for i, name in enumerate(a["name"] for a in ATTENDEES)}
 def payload(bot_id: str, t: float, kind: str, who: str | None, text: str | None) -> dict:
     if kind == "bot":
         return {"event": f"bot.{text}", "data": {"data": {"code": text}, "bot": {"id": bot_id}}}
-    participant = {"id": PIDS[who], "name": who, "is_host": who == "Akash", "platform": "desktop",
+    participant = {"id": PIDS.get(who, 999), "name": who, "is_host": who == "Akash", "platform": "desktop",
                    "extra_data": {}, "email": None}
     bot = {"id": bot_id, "metadata": {}}
     if kind == "say":

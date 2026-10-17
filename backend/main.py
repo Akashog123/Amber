@@ -311,6 +311,7 @@ def forget(mid: int):
             q["task"].cancel()
     for d in (filler_until, last_filler, speaking_until, since_extract, screens, voice_locks):
         d.pop(mid, None)
+    email_asked.difference_update({k for k in email_asked if k[0] == mid})
 
 
 # --- Recall webhooks ---------------------------------------------------------
@@ -408,6 +409,7 @@ def handle_event(mid: int, event: str, data: dict):
     elif event == "participant_events.join":
         db.execute("INSERT INTO participants (meeting_id,name,joined_at) VALUES (?,?,?)", mid, who, ts)
         publish("participant.join", mid, {"name": who, "at": ts})
+        ask_for_email(mid, who, (inner.get("participant") or {}).get("email"))
     elif event == "participant_events.leave":
         db.execute("UPDATE participants SET left_at=? WHERE id=(SELECT MAX(id) FROM participants "
                    "WHERE meeting_id=? AND name=? AND left_at IS NULL)", ts, mid, who)
@@ -423,6 +425,12 @@ def handle_event(mid: int, event: str, data: dict):
             lag = (datetime.now(timezone.utc) - datetime.fromisoformat(ts.replace("Z", "+00:00"))).total_seconds()
             if lag > 2:
                 print(f"[chat] {who}'s message arrived {lag:.1f}s after it was sent")
+        if (m := EMAIL_IN_TEXT.search(text)) and (len(text.split()) <= 4 or MY_EMAIL.search(text)):
+            # "abhishek@co.com" / "my email is ..." -> the recap goes to them too ("send it to rahul@x.com" doesn't
+            # count: that's about someone else)
+            if add_attendee(mid, who, m[0]):
+                _spawn(amber_chat(mid, f"Thanks, {who.split(' ')[0]}. I'll send the recap to {m[0]}."))
+            return
         if is_addressed(text) and command(mid, who, text, via_chat=True):
             return
         if resolve_confirmation(mid, who, text):
@@ -936,6 +944,42 @@ def _attendee_email(mid: int, name: str | None) -> str:
     return (exact or (first if len(set(first)) == 1 else [""]))[0]
 
 
+# Recap recipients beyond the dispatch list: Google Meet doesn't give bots participants' emails, so Amber asks in
+# chat once per person who has none, and an email typed there (or sent by Recall, as Zoom/Teams sometimes do) joins
+# the recap list. Live: only the person who dispatched her got the recap.
+EMAIL_IN_TEXT = re.compile(r"[^@\s,<>()\"']+@[^@\s,<>()\"']+\.[a-z]{2,}", re.I)
+MY_EMAIL = re.compile(r"\b(my|mine|me)\b.{0,12}\b(e-?mail|mail)\b|\b(e-?mail|mail)\s*(id)?\s*(is|:)", re.I)
+email_asked: set[tuple[int, str]] = set()  # (meeting, participant) she already asked
+
+
+def add_attendee(mid: int, name: str, email: str) -> bool:
+    """Put someone on the recap list (and on their open tasks' reminders). False if that email is already there."""
+    email = email.strip().strip(".")
+    if not EMAIL.match(email) or db.row("SELECT 1 FROM attendees WHERE meeting_id=? AND lower(email)=lower(?)", mid, email):
+        return False
+    same = db.row("SELECT rowid FROM attendees WHERE meeting_id=? AND lower(name)=lower(?) AND COALESCE(email,'')=''",
+                  mid, name)
+    if same:
+        db.execute("UPDATE attendees SET email=? WHERE rowid=?", email, same["rowid"])
+    else:
+        db.execute("INSERT INTO attendees VALUES (?,?,?)", mid, name, email)
+    for t in db.rows("SELECT id, owner FROM tasks WHERE meeting_id=? AND COALESCE(owner_email,'')=''", mid):
+        if e := _attendee_email(mid, t["owner"]):
+            db.execute("UPDATE tasks SET owner_email=? WHERE id=?", e, t["id"])
+    publish("attendee.added", mid, {"name": name, "email": email})
+    return True
+
+
+def ask_for_email(mid: int, who: str, email: str | None):
+    if email and add_attendee(mid, who, email):
+        return
+    if who in ("Unknown", "Amber") or (mid, who) in email_asked or _attendee_email(mid, who):
+        return
+    email_asked.add((mid, who))
+    _spawn(amber_chat(mid, f"Hi {who.split(' ')[0]}, I'm Amber, taking notes for this meeting. "
+                           "Type your email here and I'll send you the recap."))
+
+
 TASK_STATES = {"open", "in_progress", "done", "blocked"}
 _GENERIC = {"the", "and", "for", "two", "with", "from", "this", "that"}
 
@@ -1178,7 +1222,8 @@ async def post_meeting(mid: int, force: bool = False):
         notes = db.rows("SELECT * FROM record_notes WHERE meeting_id=? ORDER BY id", mid)
         people = db.rows("SELECT name, joined_at, left_at FROM participants WHERE meeting_id=? ORDER BY id", mid)
         subject, html, text = mailer.recap(m, mom, tasks, notes, people)
-        to = [a["email"] for a in db.rows("SELECT email FROM attendees WHERE meeting_id=?", mid)]
+        to = list(dict.fromkeys(a["email"].strip().lower() for a in db.rows(  # once each, dispatch list + chat
+            "SELECT email FROM attendees WHERE meeting_id=? AND COALESCE(email,'')!=''", mid)))
         await mailer.send(mid, "recap", to, subject, html, text)
         _set_plain_status(mid, "completed")
         publish("meeting.recap", mid, {"mom": mom})
@@ -1247,6 +1292,16 @@ async def resend_recap(mid: int):
     if mid in recapping:
         raise HTTPException(409, "The recap is still being written; try again in a moment.")
     await post_meeting(mid, force=True)
+    return db.meeting_detail(mid)
+
+
+@app.post("/api/meetings/{mid}/attendees")
+async def add_meeting_attendee(mid: int, a: Attendee):
+    """Someone was missed: add them (then POST .../recap to resend)."""
+    db.row("SELECT id FROM meetings WHERE id=?", mid) or _404()
+    if not EMAIL.match(a.email.strip()):
+        raise HTTPException(400, "That doesn't look like an email address.")
+    add_attendee(mid, a.name.strip() or a.email.split("@")[0], a.email)
     return db.meeting_detail(mid)
 
 
