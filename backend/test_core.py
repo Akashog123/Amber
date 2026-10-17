@@ -119,7 +119,7 @@ assert terms[0] == "Amber" and "PO-1041" in terms and "Akash" in terms and len(t
 assert "recallai_streaming" in recall.transcript_provider(terms)
 os.environ["RECALL_TRANSCRIBER"] = "deepgram"
 dg = recall.transcript_provider(terms)["deepgram_streaming"]
-assert dg["model"] == "nova-3" and dg["language"] == "en-IN" and dg["keyterm"][0] == "Amber"
+assert dg["model"] == "nova-3" and dg["language"] == "multi" and dg["keyterm"][0] == "Amber"
 os.environ["RECALL_TRANSCRIBER"] = ""
 
 # Fillers fit the question; greetings and questions about Amber herself get none.
@@ -521,6 +521,14 @@ time.sleep(0.6)
 assert c.get(f"/api/meetings/{D}").json()["hand_raised"] is not None
 c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "Akash", "neither")).raise_for_status()
 brain.answer = fake_answer
+# Hindi (Deepgram multi writes Devanagari): "अंबर, बोलो" invites her; "दूसरा वाला" picks option 2.
+c.portal.call(main.apply_extraction, D, {"record_notes": [{**pump_note, "note": "हिंदी नोट"}]})
+say(d["bot_id"], "Akash", "अंबर, बोलो")
+time.sleep(0.4)
+assert "2, PO-1046" in replies(D)[0][-1], replies(D)[0][-1]
+c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "Akash", "दूसरा वाला")).raise_for_status()
+time.sleep(0.3)
+assert db.row("SELECT note FROM record_notes WHERE record_id='PO-1046' ORDER BY id DESC LIMIT 1")["note"] == "हिंदी नोट"
 assert c.get("/media/amber").status_code == 200 and "amberStats" in c.get("/media/amber").text
 assert c.get("/media/amber", headers={"cf-connecting-ip": "1.2.3.4"}).status_code == 200  # Recall loads it via the tunnel
 os.environ["ELEVENLABS_API_KEY"] = ""

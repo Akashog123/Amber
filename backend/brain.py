@@ -65,9 +65,13 @@ still unclear, ask which one. If asked whether you have a question, say yes and 
 If the TRANSCRIPT shows you already answered the same question in this meeting, don't recite it again word for
 word: reply with ONE sentence of at most 12 words, starting "As I mentioned," with only the key fact (e.g. "As I
 mentioned, Chiller #2 is running with high vibration flagged."). If they ask for more detail, give it.
-Reply in the language of the question: a Hindi or Hinglish question gets a natural spoken Hindi reply in
-Devanagari script (keep record IDs like PO-1041 as they are); an English question gets English. The fallback
-line in Hindi is: "{FALLBACK_HI}\""""
+Language: reply in the language the person is speaking to you. Hindi in Devanagari, romanised Hindi ("PO-1041 ka
+status kya hai") and Hindi-English mixes all count as Hindi. A Hindi reply is natural spoken Hindi in Devanagari
+script, the way people in an Indian office talk: keep record IDs (PO-1041), product names, vendor names and common
+English work words (status, delivery, order, contract) in English, and write numbers and dates as digits
+("30 अक्टूबर", "3 हफ्ते"). If someone asked you to speak a language ("Hindi mein baat karo", "speak English"), keep
+using it with that person until they ask for another, even when the speech recognition writes their words in English
+letters. The fallback line in Hindi is: "{FALLBACK_HI}\""""
 
 _client: genai.Client | None = None
 _http: httpx.AsyncClient | None = None

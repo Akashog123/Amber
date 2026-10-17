@@ -15,19 +15,26 @@ and why. No I/O here, so the whole policy is readable (and testable) in one plac
 import re
 from dataclasses import dataclass, field
 
-WAKE = re.compile(r"\b(amber|ember|amba|ambar|umber)\b|अंबर|अम्बर|एम्बर|ऐम्बर", re.I)
+WAKE = re.compile(r"\b(amber|ember|amba|ambar|umber)\b|अंबर|अम्बर|एम्बर|ऐम्बर|एंबर|ऐंबर", re.I)
 QUESTION = re.compile(r"\b(can you|could you|would you|tell me|what|what's|who|whose|when|where|how|which|"
                       r"why|is there|are there|do we|did we|have we|has it|status|update|please|give me|check)\b", re.I)
-HINDI = re.compile(r"[ऀ-ॿ]|\b(kya|kaun|kab|kahan|kitna|kitne|batao|bataiye|hai|hain|karo|kijiye)\b", re.I)
+# Hindi as Deepgram's multilingual model writes it: Devanagari, or romanised Hinglish.
+HINDI = re.compile(r"[ऀ-ॿ]|\b(kya|kaun|kab|kahan|kitna|kitne|kaise|kyun|kyon|batao|bataiye|bataye|hai|hain|karo|"
+                   r"kijiye|chahiye|mein|nahi|haan)\b", re.I)
+# Hindi puts the question word anywhere ("PO-1041 ka status kya hai"), so any of these marks a question.
+HINDI_ASKS = re.compile(r"\b(kya|kab|kaun|kitna|kitne|kahan|kaise|kyun|kyon|batao|bataiye|bataye)\b|"
+                        r"क्या|कब|कौन|कितन|कहाँ|कहां|कैसे|क्यों|बताओ|बताइए|बताइये|बताएं", re.I)
 # Talking ABOUT her, not to her (live: "Now Amber has a question about the recording." got "I'm ready...").
 ABOUT_HER = re.compile(r"\bamber\s+(has|had|was|will|would|should|does|did|said|says|raised|asked|wants|thought|"
                        r"thinks|knows|needs|can't|cannot|won't)\b|\b(tell|ask)\s+amber\b", re.I)
-CORRECTION = re.compile(r"\b(actually|i mean|sorry|instead|rather|wait)\b", re.I)
-CANCEL = re.compile(r"\b(never ?mind|forget (it|about (it|that)|that)|cancel that|scratch that|no worries)\b", re.I)
+CORRECTION = re.compile(r"\b(actually|i mean|sorry|instead|rather|wait|matlab|nahi nahi)\b|मतलब|नहीं नहीं", re.I)
+CANCEL = re.compile(r"\b(never ?mind|forget (it|about (it|that)|that)|cancel that|scratch that|no worries|chhodo|chodo|"
+                    r"rehne do|jaane do)\b|छोड़ो|छोड़िए|रहने दो|जाने दो", re.I)
 _NOISE = {"hey", "hi", "hello", "ok", "okay", "so", "um", "uh", "yo", "and", "amber"}
 
 
-_OPENERS = {"and", "so", "okay", "ok", "also", "then", "but", "hey", "amber", "um", "uh", "acha", "accha"}
+_OPENERS = {"and", "so", "okay", "ok", "also", "then", "but", "hey", "amber", "um", "uh", "acha", "accha", "toh",
+            "haan", "अच्छा", "तो", "हाँ"}
 _ASKS = {"what", "what's", "whats", "when", "where", "who", "whose", "which", "how", "why", "is", "are", "was",
          "were", "can", "could", "would", "will", "do", "does", "did", "have", "has", "should", "any", "kya", "kab",
          "kaun", "kitna", "kahan"}
@@ -36,7 +43,7 @@ _ASKS = {"what", "what's", "whats", "when", "where", "who", "whose", "which", "h
 def clear_question(text: str) -> bool:
     """Unmistakably a question: ends with "?" or starts with a question word ("and when does it arrive").
     Words like "check" or "status" alone don't count: "wait, let me check the PO" is not a question."""
-    if text.rstrip().endswith("?"):
+    if text.rstrip().endswith("?") or HINDI_ASKS.search(text):
         return True
     words = [w.strip(",.!") for w in text.lower().split()]
     while words and words[0] in _OPENERS:
@@ -46,7 +53,7 @@ def clear_question(text: str) -> bool:
 
 def has_content(text: str) -> bool:
     """False for a bare "Amber" / "hey Amber": the actual question is probably still coming."""
-    words = re.sub(r"[^a-z' ]", " ", WAKE.sub(" ", text.lower())).split()
+    words = re.sub(r"[^a-z'ऀ-ॿ ]", " ", WAKE.sub(" ", text.lower())).split()  # keep Devanagari words
     return any(w not in _NOISE for w in words)
 
 
@@ -169,4 +176,9 @@ if __name__ == "__main__":
     assert not question_pending("Amber, what's the ETA") and not question_pending("thanks Amber, that helps.")
     assert clear_question("and when does it arrive") and clear_question("okay, is it delivered")
     assert not clear_question("wait, let me check the PO") and not clear_question("status looks fine")
+    # Hindi / Hinglish as Deepgram multi writes it
+    assert has_content("अंबर, पंप कब आएगा") and not has_content("अंबर,")
+    assert clear_question("PO-1041 ka status kya hai") and clear_question("तो पंप कब आएगा")
+    assert CANCEL.search("अच्छा छोड़ो") and CANCEL.search("chhodo yaar") and CORRECTION.search("matlab booster pump")
+    assert WAKE.search("एंबर, बताओ") and HINDI.search("budget kitna hai")
     print("ok")

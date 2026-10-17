@@ -463,8 +463,9 @@ def interrupts(words: list[dict]) -> bool:
 RECORD_CMD = re.compile(r"\b(stop|pause|halt|start|resume|restart|continue|unpause)\b\W+(?:\w+\W+){0,2}?"
                         r"(recording|record)\b", re.I)
 GO_AHEAD = re.compile(r"\b(go ahead|what is it|what's that|you had a question|your question|raised your hand|"
-                      r"(do )?you have a (question|doubt)|hand (is )?(up|raised)|"
-                      r"speak up|you wanted to say)\b", re.I)
+                      r"(do )?you have a (question|doubt)|hand (is )?(up|raised)|bolo|boliye|puchho|poochho|"
+                      r"speak up|you wanted to say)\b"
+                      r"|बोलो|बोलिए|पूछो|पूछिए", re.I)  # outside \b: Python's \b fails after a Hindi vowel sign
 SCREEN = re.compile(r"\b(screen|slides?|shared|sharing|showing|shown|chart|graph|diagram|spreadsheet|sheet|"
                     r"table|deck|this (page|document|doc))\b|स्क्रीन|स्लाइड", re.I)
 SCREEN_FRESH = 120  # seconds a screen-share frame stays usable
@@ -853,10 +854,16 @@ CONFIRM_MIN = float(os.getenv("AMBER_CONFIRM_MIN", "0.5"))  # >= this (and < AUT
 EXTRACT_EVERY = int(os.getenv("AMBER_EXTRACT_EVERY", "4"))  # new human lines between extraction passes
 RECORD_ID = re.compile(r"\b(PO|EQ)-?\s?(\d{3,4})\b", re.I)
 # "one" is a pronoun more often than a number ("that one", "the other one"): only a bare "one" picks option 1.
-CHOICE_WORDS = {"1": 0, "first": 0, "2": 1, "two": 1, "second": 1, "3": 2, "three": 2, "third": 2}
-RELATIVE = re.compile(r"\b(other|not|else|instead|another|different)\b", re.I)  # "not that one, the other": model's job
-YES = re.compile(r"^\W*(amber\W+)?(yes|yeah|yep|correct|right|that one|exactly)\b", re.I)
-NO = re.compile(r"\b(neither|none of (them|those)|no,? (it'?s )?not|ignore (it|that)|skip (it|that))\b", re.I)
+CHOICE_WORDS = {"1": 0, "first": 0, "2": 1, "two": 1, "second": 1, "3": 2, "three": 2, "third": 2,
+                # Hindi ("दूसरा वाला", "pehla"); roman "do" (two) is left out: it's an English word too
+                "pehla": 0, "pehli": 0, "पहला": 0, "पहली": 0, "एक": 0, "dusra": 1, "doosra": 1, "dusri": 1, "दूसरा": 1,
+                "दूसरी": 1, "दो": 1, "teesra": 2, "tisra": 2, "तीसरा": 2, "तीसरी": 2, "तीन": 2}
+# "not that one, the other" / "नहीं, वो नहीं": the answer model reads these against her open question
+RELATIVE = re.compile(r"\b(other|not|else|instead|another|different|nahi)\b|नहीं", re.I)
+YES = re.compile(r"^\W*(amber\W+)?(yes|yeah|yep|correct|right|that one|exactly|haan|han|ji|sahi)\b|^\W*(हाँ|हां|जी|सही)",
+                 re.I)
+NO = re.compile(r"\b(neither|none of (them|those)|no,? (it'?s )?not|ignore (it|that)|skip (it|that)|dono nahi|koi nahi)\b"
+                r"|दोनों नहीं|कोई नहीं|कोई भी नहीं", re.I)
 since_extract: dict[int, int] = {}
 extracting: set[int] = set()
 
@@ -1068,7 +1075,7 @@ def resolve_confirmation(mid: int, who: str, text: str) -> bool:
     if not pc:
         return False
     cands = json.loads(pc["candidates_json"])["candidates"]
-    words = re.sub(r"[^a-z0-9 ]", " ", WAKE.sub(" ", text.lower())).split()
+    words = re.sub(r"[^a-z0-9ऀ-ॿ ]", " ", WAKE.sub(" ", text.lower())).split()  # keep Devanagari
     chosen = None
     if m := RECORD_ID.search(text):
         rid = f"{m.group(1).upper()}-{m.group(2)}"

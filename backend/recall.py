@@ -30,13 +30,14 @@ def _client() -> httpx.AsyncClient:
 
 
 def transcript_provider(keyterms: list[str]) -> dict:
-    """Deepgram nova-3 (Indian English + boosted names) when enabled, else Recall's own English-only ASR.
+    """Deepgram nova-3 (multilingual: English + Hindi code-switching, boosted names) when enabled, else Recall's
+    own English-only ASR.
     Deepgram's key lives in the Recall dashboard (Transcription settings), not here."""
     if os.getenv("RECALL_TRANSCRIBER", "recall") != "deepgram":
         return {"recallai_streaming": {"mode": "prioritize_low_latency", "language_code": "en"}}
     return {"deepgram_streaming": {
         "model": "nova-3",
-        "language": os.getenv("DEEPGRAM_LANGUAGE", "en-IN"),
+        "language": os.getenv("DEEPGRAM_LANGUAGE", "multi"),
         "keyterm": keyterms[:50],  # boosts "Amber" and record names; Deepgram caps the keyterm prompt size
         "smart_format": True,
         "endpointing": int(os.getenv("DEEPGRAM_ENDPOINTING_MS", "300")),  # silence before a segment is final
@@ -68,6 +69,10 @@ async def create_bot(meeting_url: str, webhook_url: str, keyterms: list[str] = (
         "bot_name": "Amber",
         "recording_config": recording_config(webhook_url, list(keyterms), ws_url),
         **voice,
+        # The page plays her voice on the bot's own machine: the default one has 0.25 CPU core, and the audio comes
+        # out choppy (heard live; Recall's FAQ says so). 2.25 cores, about +$0.10/h. AMBER_BOT_VARIANT overrides.
+        **({"variant": dict.fromkeys(("zoom", "google_meet", "microsoft_teams"),
+                                    os.getenv("AMBER_BOT_VARIANT") or "web_4_core")} if media_url else {}),
         **({"join_at": join_at} if join_at else {}),  # scheduled meeting: Recall sends the bot at that time
     }
     async with _client() as c:
