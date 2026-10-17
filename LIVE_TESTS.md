@@ -109,7 +109,7 @@ Check results with: `curl localhost:8000/api/meetings/<id>` (tasks) and `curl lo
 
 | ID | Say / type | Pass if |
 |---|---|---|
-| K1 | "The Grundfos pump shipment got pushed out by three weeks." Keep talking for 3-4 lines. | Amber stays silent; chat gets "✋ Quick check … 1) PO-1041 … or 2) PO-1046 …". The dashboard live view shows the "hand raised" banner. |
+| K1 | "The Grundfos pump shipment got pushed out by three weeks." Keep talking for 3-4 lines. | Amber stays silent. Her tile turns into a waving ✋ ("Hand raised"), the dashboard shows the "hand raised" banner, and the chat stays empty. Ignore her for ~20 s (`AMBER_HAND_WAIT`): only then does chat get "✋ Quick check … 1) PO-1041 … or 2) PO-1046 …". (mp3 voice mode has no tile, so the question goes to chat at once.) |
 | K2 | "Amber, go ahead." | She asks the question out loud, short form ("…did you mean 1, PO-1041 … or 2, PO-1046 …"). |
 | K3 | "Amber, two" (or type "2" in chat) | "Got it, noted on PO-1046." The banner goes away. |
 

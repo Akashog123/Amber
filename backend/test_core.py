@@ -472,6 +472,38 @@ with c.websocket_connect(f"/ws/media?m={D}&token=t") as page:
         "data": {"words": words, "participant": {"name": "Priya"}}, "bot": {"id": d["bot_id"]}}}).raise_for_status()
     assert page.receive_json() == {"type": "stop"}
     assert main.conv(D).followups["Akash"][0] > time.monotonic()  # a streamed answer still opens the follow-up window
+# Raise-hand with a tile: the hand goes up first; the chat gets the question only if the hand is ignored.
+import json  # noqa: E402
+
+
+def next_json(page):  # skip audio frames
+    while not (m := page.receive()).get("text"):
+        pass
+    return json.loads(m["text"])
+
+
+main.HAND_WAIT = 1.5
+amber_chats = lambda: [x["text"] for x in replies(D)[1]]  # noqa: E731
+with c.websocket_connect(f"/ws/media?m={D}&token=t") as page:
+    assert next_json(page) == {"type": "hand", "on": False}
+    before = len(amber_chats())
+    c.portal.call(main.apply_extraction, D, {"record_notes": [pump_note]})
+    assert next_json(page) == {"type": "hand", "on": True}
+    assert len(amber_chats()) == before  # hand up, chat still quiet
+    time.sleep(1.2)
+    assert amber_chats()[-1].startswith("✋ Quick check")  # ignored -> written in chat
+    c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "Akash", "neither")).raise_for_status()
+    assert next_json(page) == {"type": "hand", "on": False}
+    # Invited before the wait runs out: she asks aloud and the chat stays quiet.
+    c.portal.call(main.apply_extraction, D, {"record_notes": [{**pump_note, "note": "Delivery slipped again"}]})
+    assert next_json(page) == {"type": "hand", "on": True}
+    n_chat = len(amber_chats())
+    say(d["bot_id"], "Akash", "Amber, you have a question?")
+    time.sleep(1.5)
+    assert len(amber_chats()) == n_chat, amber_chats()[n_chat:]
+    c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "Akash", "neither")).raise_for_status()
+    assert next_json(page) == {"type": "hand", "on": False}
+main.HAND_WAIT = 0
 assert c.get("/media/amber").status_code == 200 and "amberStats" in c.get("/media/amber").text
 assert c.get("/media/amber", headers={"cf-connecting-ip": "1.2.3.4"}).status_code == 200  # Recall loads it via the tunnel
 os.environ["ELEVENLABS_API_KEY"] = ""

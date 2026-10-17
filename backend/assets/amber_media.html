@@ -21,11 +21,16 @@
   .hand { position: absolute; top: 36px; left: 50%; transform: translateX(-50%); display: none;
     background: #fff4db; color: #7a5600; border-radius: 999px; padding: 14px 30px; font-size: 28px; font-weight: 700; }
   body.hand-up .hand { display: block; }
+  /* Recall can't raise a real Meet hand, so the whole tile becomes one: hard to miss in a grid of faces. */
+  body.hand-up .avatar { font-size: 0; background: #fff4db; animation: wave 1.6s ease-in-out infinite; }
+  body.hand-up .avatar::before { content: "✋"; font-size: 130px; }
+  body.hand-up { background: radial-gradient(circle at 50% 40%, #5a4210, var(--bg2) 75%); }
+  @keyframes wave { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(-12deg); } 75% { transform: rotate(12deg); } }
   .offline { position: absolute; bottom: 24px; width: 100%; text-align: center; color: #c97a7a; font-size: 18px; }
 </style>
 </head>
 <body>
-<div class="hand">✋ Amber has a question about a record (see chat)</div>
+<div class="hand">✋ Question about a record: say “Amber, go ahead”</div>
 <div class="stage"><div class="card">
   <div class="avatar">A</div>
   <h1>Amber</h1>
@@ -45,7 +50,7 @@
 
   function setSpeaking(on) {
     document.body.classList.toggle("speaking", on);
-    statusEl.textContent = on ? "Speaking" : "Listening";
+    statusEl.textContent = on ? "Speaking" : document.body.classList.contains("hand-up") ? "Hand raised" : "Listening";
   }
 
   function play(bytes) {
@@ -92,7 +97,10 @@
       if (typeof e.data !== "string") return play(new Uint8Array(e.data));
       const msg = JSON.parse(e.data);
       if (msg.type === "stop") stop();
-      if (msg.type === "hand") document.body.classList.toggle("hand-up", !!msg.on);
+      if (msg.type === "hand") {
+        document.body.classList.toggle("hand-up", !!msg.on);
+        if (!sources.length) statusEl.textContent = msg.on ? "Hand raised" : "Listening";
+      }
       if (msg.type === "status") statusEl.textContent = msg.text;
     };
     ws.onclose = () => {  // backend restarted / tunnel blip: keep trying, Amber stays in the call

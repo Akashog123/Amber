@@ -463,6 +463,7 @@ def interrupts(words: list[dict]) -> bool:
 RECORD_CMD = re.compile(r"\b(stop|pause|halt|start|resume|restart|continue|unpause)\b\W+(?:\w+\W+){0,2}?"
                         r"(recording|record)\b", re.I)
 GO_AHEAD = re.compile(r"\b(go ahead|what is it|what's that|you had a question|your question|raised your hand|"
+                      r"(do )?you have a (question|doubt)|hand (is )?(up|raised)|"
                       r"speak up|you wanted to say)\b", re.I)
 SCREEN = re.compile(r"\b(screen|slides?|shared|sharing|showing|shown|chart|graph|diagram|spreadsheet|sheet|"
                     r"table|deck|this (page|document|doc))\b|स्क्रीन|स्लाइड", re.I)
@@ -583,7 +584,8 @@ def command(mid: int, who: str, text: str, via_chat: bool = False) -> bool:
         _spawn(record_command(mid, m.group(1).lower() in ("stop", "pause", "halt"), via_chat))
         return True
     if GO_AHEAD.search(text) and (pc := open_confirmation(mid)):
-        # Permission given: ask out loud (short spoken form; the chat keeps the full question).
+        # Permission given: ask out loud (short spoken form), so the hand's chat fallback is no longer needed.
+        asked_aloud.add(pc["id"])
         _spawn(say(mid, pc["question"].removeprefix("✋ ") if via_chat else spoken_question(pc), via_chat))
         if not via_chat:
             conv(mid).record_answer_until = time.monotonic() + ANSWER_WINDOW  # replies are "it's 2", not "Amber, two"
@@ -1018,17 +1020,29 @@ async def ask_which_record(mid: int, n: dict, cands: list[str], records: dict):
     else:
         question = (f'Quick check: should I note "{n.get("note")}" on {cands[0]} {records[cands[0]]["name"]}? '
                     "Reply yes or no.")
-    # Raise-hand protocol: never interrupt people talking. The question goes to chat with a raised hand (and a
-    # badge on the dashboard); Amber says it out loud only if someone invites her ("Amber, go ahead").
     question = "✋ " + question
     if db.row("SELECT id FROM pending_confirmations WHERE meeting_id=? AND resolved=0 AND question=?", mid, question):
         return  # same line seen by two extraction passes: ask once
-    db.execute("INSERT INTO pending_confirmations (meeting_id,question,candidates_json,created_at) VALUES (?,?,?,?)",
-               mid, question, json.dumps({"candidates": cands, "note": n}), db.now())
+    pid = db.execute("INSERT INTO pending_confirmations (meeting_id,question,candidates_json,created_at) VALUES (?,?,?,?)",
+                     mid, question, json.dumps({"candidates": cands, "note": n}), db.now())
     publish("confirmation.asked", mid, {"question": question, "candidates": cands})
-    publish("amber.hand_raised", mid, {"question": question})
-    _spawn(media_send(mid, {"type": "hand", "on": True}))  # badge on her camera tile (streaming page)
-    await amber_chat(mid, question)
+    _spawn(raise_hand(mid, {"id": pid, "question": question}))  # waits out the hand; extraction carries on
+
+
+HAND_WAIT = float(os.getenv("AMBER_HAND_WAIT", "20"))  # seconds her raised hand waits before she writes in chat
+asked_aloud: set[int] = set()  # confirmations someone invited her to ask ("Amber, go ahead")
+
+
+async def raise_hand(mid: int, pc: dict):
+    """Raise-hand protocol: never interrupt people talking. Her tile shows a raised hand first; she asks out loud
+    only if invited ("Amber, go ahead"), and writes the question in chat only if the hand is ignored for HAND_WAIT
+    seconds. With no tile to show a hand on (mp3 voice), the chat is the hand."""
+    publish("amber.hand_raised", mid, {"question": pc["question"]})
+    if await media_send(mid, {"type": "hand", "on": True}):
+        await asyncio.sleep(HAND_WAIT)
+    row = db.row("SELECT resolved FROM pending_confirmations WHERE id=?", pc["id"])
+    if row and not row["resolved"] and pc["id"] not in asked_aloud:
+        await amber_chat(mid, pc["question"])
 
 
 CONFIRM_TTL_MIN = 15  # an old unanswered question shouldn't capture "the second one" said much later
@@ -1067,8 +1081,8 @@ def resolve_confirmation(mid: int, who: str, text: str) -> bool:
     else:
         _spawn(amber_chat(mid, "Okay, I won't update any record for that."))
     publish("confirmation.resolved", mid, {"chosen": chosen, "by": who})
-    if nxt := open_confirmation(mid):  # an earlier question is still waiting: ask it again so replies line up
-        _spawn(amber_chat(mid, nxt["question"]))
+    if nxt := open_confirmation(mid):  # an earlier question is still waiting: raise the hand for it again
+        _spawn(raise_hand(mid, nxt))
     else:
         publish("amber.hand_lowered", mid, {})
         _spawn(media_send(mid, {"type": "hand", "on": False}))
