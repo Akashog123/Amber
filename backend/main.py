@@ -6,7 +6,7 @@ import os
 import re
 import sys
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -379,6 +379,7 @@ def handle_event(mid: int, event: str, data: dict):
         # A real interruption, not a cough or "mm": two words, or one long one ("Wait", "Stop" count too).
         if interrupts(inner.get("words") or []):
             yield_floor(mid)
+        conv(mid).talking_since.setdefault(who, time.monotonic())
         still_talking(mid, who)
     elif event == "transcript.data":
         words = inner.get("words") or []
@@ -386,6 +387,9 @@ def handle_event(mid: int, event: str, data: dict):
         if not text:
             return
         start = (words[0].get("start_timestamp") or {}).get("relative")
+        now = time.monotonic()
+        began = conv(mid).talking_since.pop(who, now)
+        began = began if now - began < STALE_TALK else now  # a partial whose final never came
         if start is not None and db.row("SELECT id FROM utterances WHERE meeting_id=? AND speaker=? AND ts=? AND text=?",
                                         mid, who, start, text):
             return  # Recall re-delivered a webhook: storing (and answering) it twice would be wrong
@@ -399,7 +403,7 @@ def handle_event(mid: int, event: str, data: dict):
             pass
         elif not ((addressed or RECORD_ID.search(text) or time.monotonic() < conv(mid).record_answer_until)
                   and resolve_confirmation(mid, who, text)):
-            on_speech(mid, who, text, addressed)
+            on_speech(mid, who, text, addressed, at=began)
         maybe_extract(mid)
     elif event == "participant_events.join":
         db.execute("INSERT INTO participants (meeting_id,name,joined_at) VALUES (?,?,?)", mid, who, ts)
@@ -415,6 +419,10 @@ def handle_event(mid: int, event: str, data: dict):
             return  # re-delivered webhook
         db.execute("INSERT INTO chat (meeting_id,sender,text,ts,is_amber) VALUES (?,?,?,?,0)", mid, who, text, ts)
         publish("chat", mid, {"sender": who, "text": text, "at": ts, "addressed": is_addressed(text)})
+        with suppress(ValueError, TypeError):
+            lag = (datetime.now(timezone.utc) - datetime.fromisoformat(ts.replace("Z", "+00:00"))).total_seconds()
+            if lag > 2:
+                print(f"[chat] {who}'s message arrived {lag:.1f}s after it was sent")
         if is_addressed(text) and command(mid, who, text, via_chat=True):
             return
         if resolve_confirmation(mid, who, text):
@@ -466,6 +474,7 @@ speaking_until: dict[int, float] = {}       # meeting -> monotonic time Amber's 
 FOLLOWUP = float(os.getenv("AMBER_FOLLOWUP", "10"))  # seconds after a reply the asker can follow up
 ANSWER_WINDOW = 30.0  # after asking her record question aloud, a bare spoken reply ("it's 2") counts
 OTHERS_WINDOW = 6.0   # after she speaks, someone else's clear question goes to the model ("and the booster pump?")
+STALE_TALK = 30.0     # a line "began" longer ago than this is a lost partial, not a long sentence
 convs: dict[int, Conversation] = {}  # meeting -> turn-taking state (turns.py)
 _tasks: set[asyncio.Task] = set()
 
@@ -481,9 +490,11 @@ def _spawn(coro) -> asyncio.Task:
     return t
 
 
-def on_speech(mid: int, speaker: str, text: str, addressed: bool, why: str = ""):
+def on_speech(mid: int, speaker: str, text: str, addressed: bool, why: str = "", at: float | None = None,
+              judged: bool = False):
+    """`at`: when they began saying it; open windows are judged at that moment (finals arrive late)."""
     c = conv(mid)
-    r = route(c, speaker, text, addressed, names_someone_else(mid, speaker, text), time.monotonic())
+    r = route(c, speaker, text, addressed, names_someone_else(mid, speaker, text), at or time.monotonic(), judged)
     decided(mid, speaker, text, r.action, why or r.why)
     old = c.pending.get(speaker)
     if r.cancel and old:
@@ -526,7 +537,7 @@ async def classify(mid: int, speaker: str, text: str):
         print(f"[turn] classify failed: {e!r}")
         to_amber = False
     if to_amber:
-        on_speech(mid, speaker, text, addressed=True, why="the model judged it was said to Amber")
+        on_speech(mid, speaker, text, addressed=True, why="the model judged it was said to Amber", judged=True)
     else:
         decided(mid, speaker, text, "ignore", "the model judged it wasn't for Amber")
 
@@ -607,7 +618,9 @@ async def record_command(mid: int, pause: bool, via_chat: bool):
         msg = "Recording is already paused." if pause else "I'm already recording."
     else:
         try:
+            t = time.perf_counter()
             await set_recording(mid, pause)
+            print(f"[amber] recall {'pause' if pause else 'resume'}_recording took {time.perf_counter() - t:.1f}s")
             # Recall may stop the live transcript while paused (chat events keep coming), so the chat is the
             # resume path that always works; a spoken "resume" also works if the transcript keeps flowing.
             msg = ("Okay, recording paused. To resume, type 'Amber, resume recording' in the chat." if pause else
@@ -795,6 +808,8 @@ async def _answer(mid: int, speaker: str, q: dict, delay: float, via_chat: bool)
         # A recording request the phrase list missed ("hold off recording for a bit"): the model spotted it.
         q["committed"] = True
         await record_command(mid, action == brain.PAUSE_TOKEN, via_chat)
+        if not via_chat:  # "I'm already recording." -> "oh, then stop it" needs no name either
+            conv(mid).followups[speaker] = (max(speaking_until.get(mid, 0), time.monotonic()) + FOLLOWUP, False)
         return
     t_llm = time.perf_counter()
     try:

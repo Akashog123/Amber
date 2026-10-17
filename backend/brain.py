@@ -37,10 +37,10 @@ AI company). You take part in the live call, answer questions from the meeting c
 You were just addressed by name.
 Reply in 1-2 short spoken sentences, under 35 words. No markdown, no lists, no preamble.
 For facts about this company, its records, orders, equipment, people, tasks, numbers or decisions,
-use ONLY the CONTEXT, RECORDS, OPEN TASKS and TRANSCRIPT below. If that information is not there,
+use ONLY the CONTEXT, RECORDS, OPEN TASKS, TRANSCRIPT and MEETING CHAT below. If that information is not there,
 reply exactly: "{FALLBACK}"
-What people said in this meeting (TRANSCRIPT) is information you have: use it for questions like
-"what did I just say" or "what have we discussed".
+What people said in this meeting (TRANSCRIPT) and typed in its chat (MEETING CHAT, including your own questions
+there) is information you have: use it for questions like "what did I just say" or "what were you asking".
 The question comes from live speech recognition. If a HEARD-AS note follows the question, the words it names were
 misheard: answer about the record it gives (say its ID), or if it gives two or more records, ask which one was meant.
 Without such a note, don't guess at misheard words.
@@ -118,6 +118,7 @@ def build_context(mid: int, transcript_lines: int = 40) -> str:
                     "WHERE status != 'done' AND (series_id=? OR meeting_id=?)", m.get("series_id"), mid)
     lines = db.rows("SELECT speaker, text FROM utterances WHERE meeting_id=? ORDER BY id DESC LIMIT ?",
                     mid, transcript_lines)[::-1]
+    chat = db.rows("SELECT sender, text, is_amber FROM chat WHERE meeting_id=? ORDER BY id DESC LIMIT 10", mid)[::-1]
     # Long-term series memory: what the last meetings of this series decided and left open.
     prev = db.rows("SELECT title, created_at, mom_json FROM meetings WHERE series_id=? AND id<? AND mom_json IS NOT NULL "
                    "ORDER BY id DESC LIMIT 3", m.get("series_id"), mid) if m.get("series_id") else []
@@ -134,7 +135,12 @@ def build_context(mid: int, transcript_lines: int = 40) -> str:
             # I'll stop responding to Akash" made later answers dodge instead of declining).
             + "\n\nTRANSCRIPT (most recent last):\n"
             + "\n".join(f"Amber (your earlier reply): {u['text']}" if u["speaker"] == "Amber" else f"{u['speaker']}: {u['text']}"
-                        for u in lines))
+                        for u in lines)
+            # Her chat questions ("Did you mean PO-1046 or PO-1041?") are part of the conversation too (seen live:
+            # "Amber, what were you asking about?" got "I wasn't asking a question").
+            + "\n\nMEETING CHAT (most recent last):\n"
+            + ("\n".join(f"Amber (your earlier chat message): {x['text']}" if x["is_amber"] else f"{x['sender']}: {x['text']}"
+                         for x in chat) or "-"))
 
 
 def _mom_brief(p: dict) -> str:

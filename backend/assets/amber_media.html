@@ -35,6 +35,7 @@
 <script>
   const params = new URLSearchParams(location.search);
   const RATE = 16000;
+  const LEAD = Number(params.get("lead") || 0.3);  // jitter buffer, seconds (calibration knob: ?lead=0.5)
   const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RATE });
   let playhead = 0;          // when the next chunk starts, in ctx time
   let sources = [];          // scheduled chunks, so "stop" can cut them all
@@ -61,7 +62,9 @@
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.connect(ctx.destination);
-    playhead = Math.max(playhead, ctx.currentTime + 0.03);
+    // Chunks arrive unevenly (ElevenLabs -> backend -> tunnel -> this page). Played the moment they land, every
+    // late one leaves a gap: she stutters. After running dry, buffer LEAD seconds before playing again.
+    if (playhead < ctx.currentTime + 0.02) playhead = ctx.currentTime + LEAD;
     src.start(playhead);
     playhead += buf.duration;
     sources.push(src);

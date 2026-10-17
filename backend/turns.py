@@ -64,6 +64,9 @@ class Conversation:
     followups: dict[str, tuple[float, bool]] = field(default_factory=dict)
     record_answer_until: float = 0.0  # her record question was asked aloud: a bare "it's 2" counts as the answer
     spoke_until: float = 0.0  # shortly after she speaks, anyone's clear question may be for her (the model decides)
+    # speaker -> when their current line began (first partial transcript). Finals land seconds late, and a window
+    # counts from when they started speaking, not from when the ASR delivered it.
+    talking_since: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -74,7 +77,9 @@ class Route:
     cancel: bool = False  # withdraw the speaker's pending question first
 
 
-def route(conv: Conversation, speaker: str, text: str, addressed: bool, names_other: bool, now: float) -> Route:
+def route(conv: Conversation, speaker: str, text: str, addressed: bool, names_other: bool, now: float,
+          judged: bool = False) -> Route:
+    """`judged`: the model already said this unclear line is for Amber."""
     q = conv.pending.get(speaker)
     cancel = False
     if m := CANCEL.search(text):
@@ -93,6 +98,8 @@ def route(conv: Conversation, speaker: str, text: str, addressed: bool, names_ot
     if q and not q.get("generating"):
         return Route("append", "still asking", text, cancel)
     if q:  # her answer is being prepared
+        if judged:  # live: "Like, let me see the..." + "Chat or your data." got two answers
+            return Route("merge", "the model joined it to the question being answered", text, cancel)
         if CORRECTION.search(text):
             return Route("merge", "correction while the answer was being prepared", text, cancel)
         if question_pending(" ".join(q["parts"])):
@@ -129,6 +136,7 @@ if __name__ == "__main__":
     assert route(c, "A", "contract?", False, False, 0).action == "merge"
     assert route(c, "A", "and when does it arrive?", False, False, 0).action == "queue"
     assert route(c, "A", "yeah do that one", False, False, 0).action == "classify"
+    assert route(c, "A", "yeah do that one", True, False, 0, judged=True).action == "merge"  # one question, one answer
     c.pending.clear()
     c.followups["A"] = (10.0, False)
     assert route(c, "A", "Rahul, please send it", False, True, 5).action == "ignore"

@@ -498,6 +498,19 @@ assert asked == [], asked
 say(d["bot_id"], "Akash", "and when does it arrive?")
 time.sleep(0.4)
 assert asked == ["and when does it arrive?"], asked
+# Finals land seconds after the words (live: a follow-up begun inside the window was ignored). The window counts
+# from the first partial, i.e. when they started speaking.
+time.sleep(0.4)
+asked.clear()
+main.conv(D).followups["Akash"] = (time.monotonic() + 0.3, False)
+c.post("/webhooks/recall?token=t", json={"event": "transcript.partial_data", "data": {
+    "data": {"words": [{"text": "and"}], "participant": {"name": "Akash"}}, "bot": {"id": d["bot_id"]}}}).raise_for_status()
+time.sleep(0.5)  # window has closed by the time the final arrives
+say(d["bot_id"], "Akash", "and the boiler?")
+time.sleep(0.4)
+assert asked == ["and the boiler?"], asked
+assert "Akash" not in main.conv(D).talking_since
+assert "Amber (your earlier chat message):" in brain.build_context(D)  # she knows what she asked in chat
 
 # Record tagging can't be talked into a guess: words that fit two records get a question even at confidence 1.0.
 recs_all = {r["id"]: r for r in db.rows("SELECT id, name, aliases FROM records")}
