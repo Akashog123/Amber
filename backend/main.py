@@ -139,7 +139,7 @@ def _join_at(value: str | None) -> str | None:
         when = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         raise HTTPException(400, "join_at must be an ISO date-time.")
-    when = when if when.tzinfo else when.astimezone()  # naive = the operator's local time
+    when = when if when.tzinfo else when.replace(tzinfo=db.team_tz())  # naive = the team's local time
     now = datetime.now(timezone.utc)
     if when < now - timedelta(minutes=5):
         raise HTTPException(400, "That meeting time is in the past.")
@@ -901,15 +901,19 @@ def maybe_extract(mid: int):
         _spawn(run_extract(mid))
 
 
+extract_locks: dict[int, asyncio.Lock] = {}  # one pass at a time per meeting: two would read the same lines
+
+
 async def run_extract(mid: int):
     extracting.add(mid)
     since_extract[mid] = 0
     try:
-        # Progress lives with the meeting, so a backend restart mid-call doesn't re-read (and re-ask) everything.
-        after = (db.row("SELECT extracted_upto FROM meetings WHERE id=?", mid) or {}).get("extracted_upto") or 0
-        result, upto = await brain.extract(mid, after)
-        await apply_extraction(mid, result)
-        db.execute("UPDATE meetings SET extracted_upto=? WHERE id=?", upto, mid)
+        async with extract_locks.setdefault(mid, asyncio.Lock()):
+            # Progress lives with the meeting, so a backend restart mid-call doesn't re-read (and re-ask) everything.
+            after = (db.row("SELECT extracted_upto FROM meetings WHERE id=?", mid) or {}).get("extracted_upto") or 0
+            result, upto = await brain.extract(mid, after)
+            await apply_extraction(mid, result)
+            db.execute("UPDATE meetings SET extracted_upto=? WHERE id=?", upto, mid)
     except Exception as e:
         print(f"[extract] meeting {mid} failed: {e!r}")
         publish("extract.error", mid, {"error": str(e)})
@@ -918,11 +922,8 @@ async def run_extract(mid: int):
 
 
 async def final_extract(mid: int):
-    for _ in range(150):  # let an in-flight pass finish (max ~30s), then sweep what's left
-        if mid not in extracting:
-            break
-        await asyncio.sleep(0.2)
-    await run_extract(mid)
+    await run_extract(mid)  # queues behind an in-flight pass (lock), then sweeps whatever it left
+    extract_locks.pop(mid, None)
     await post_meeting(mid)  # MOM + recap email once the last tasks and notes are in
 
 
@@ -1190,7 +1191,7 @@ def _remind_at(t: dict) -> datetime | None:
         return datetime.fromisoformat(t["ended_at"]) + timedelta(minutes=float(DEMO_REMINDER_MIN))
     if t["due_at"]:
         try:  # due dates are local calendar days: remind REMINDER_LEAD_H before 09:00 that day
-            day = datetime.fromisoformat(t["due_at"][:10]).replace(hour=9).astimezone()
+            day = datetime.fromisoformat(t["due_at"][:10]).replace(hour=9, tzinfo=db.team_tz())
             return day - timedelta(hours=REMINDER_LEAD_H)
         except ValueError:
             pass

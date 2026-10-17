@@ -92,24 +92,38 @@ def soundex_tail(word: str) -> str:
 
 
 def _sound(word: str) -> str:
-    return word[:1] + soundex_tail(word)
+    # First letter by sound group too: "killer" / "chiller", "kontract" / "contract" (c, k, q, s... share "2")
+    return (_SOUNDEX.get(word[:1]) or word[:1]) + soundex_tail(word)
+
+
+SINGLE_MIN = 6  # one-word matches only for long words: "sales" / "seals" collide, "killer" / "chiller" don't
 
 
 def sounds_like_records(question: str) -> list[tuple[str, str, str]]:
     """Record names/aliases the question says by sound but not by spelling: speech recognition heard "pump sales"
-    for "pump seals". Returns (record id, alias, words heard). Multi-word phrases only: single words collide too
-    easily. Code does the matching so the model never has to guess."""
+    for "pump seals", "killer" for "chiller". Returns (record id, alias, words heard). Phrases match word by word;
+    a single word only if both are long and the record word belongs to just one record. Code does the matching so
+    the model never has to guess."""
     heard = re.findall(r"[a-z0-9-]+", question.lower())
+    records = db.rows("SELECT id, name, aliases FROM records")
+    phrases = [(r["id"], alias.strip(), re.findall(r"[a-z0-9-]+", alias.lower()))
+               for r in records for alias in [r["name"], *(r["aliases"] or "").split(",")]]
+    owners: dict[str, set] = {}  # one-word aliases only ("chiller", "boiler"): any word of a phrase ("service")
+    for rid, _, words in phrases:  # collides with everyday words ("surface")
+        if len(words) == 1:
+            owners.setdefault(words[0], set()).add(rid)
+    spelled = {w for _, _, words in phrases for w in words}  # heard words that are record words were heard right
     hits = []
-    for r in db.rows("SELECT id, name, aliases FROM records"):
-        for alias in [r["name"], *(r["aliases"] or "").split(",")]:
-            words = re.findall(r"[a-z0-9-]+", alias.lower())
-            if len(words) < 2:
-                continue
-            for i in range(len(heard) - len(words) + 1):
-                window = heard[i:i + len(words)]
-                if window != words and all(_sound(a) == _sound(b) for a, b in zip(window, words)):
-                    hits.append((r["id"], alias.strip(), " ".join(window)))
+    for rid, alias, words in phrases:
+        for i in range(len(heard) - len(words) + 1 if len(words) >= 2 else 0):
+            window = heard[i:i + len(words)]
+            if window != words and all(_sound(a) == _sound(b) for a, b in zip(window, words)):
+                hits.append((rid, alias, " ".join(window)))
+        w = words[0] if len(words) == 1 else ""  # a single distinctive word
+        if len(w) >= SINGLE_MIN and w.isalpha() and len(owners[w]) == 1:
+            hits += [(rid, w, h) for h in heard if len(h) >= SINGLE_MIN and h not in spelled and _sound(h) == _sound(w)]
+    in_phrase = {w for _, alias, h in hits if " " in h for w in h.split()}
+    hits = [x for x in hits if " " in x[2] or x[2] not in in_phrase]  # "killer service": the phrase wins
     return list({h[0]: h for h in hits}.values())  # one hit per record
 
 
@@ -226,7 +240,20 @@ async def answer(mid: int, speaker: str, question: str, screen_png: bytes | None
     hits = sounds_like_records(question)
     heard = "".join(f'\nHEARD-AS: "{w}" was probably "{alias}" ({rid}).' for rid, alias, w in hits)
     prompt = f"{build_context(mid)}\n\n{screen}{speaker} asked Amber: {question}{heard}"
-    return await complete(ANSWER_RULES, prompt, image_png=screen_png) or FALLBACK
+    return guard(question, await complete(ANSWER_RULES, prompt, image_png=screen_png) or FALLBACK)
+
+
+# Requests to treat people differently. The prompt says to decline; this makes sure a reply that went along with
+# one ("Understood, I'll stop responding to Akash", seen live) is never spoken.
+MANIPULATE = re.compile(r"\b(stop|don'?t|do not|never|no more)\s+(answer|respond|repl|talk|help)\w*\s+(to\s+)?(?!me\b)"
+                        r"[a-z]+|\bignore\s+(?!(it|that|this|the|my|me)\b)[a-z]+|\b(wrong|false|fake)\s+(answer|info)"
+                        r"|\bkeep\s+(it|this|that)\s+(a\s+)?secret\b|\bdon'?t\s+tell\s+(?!me\b)[a-z]+|\bside\s+with\b", re.I)
+AGREES = re.compile(r"^\W*(ok|okay|sure|understood|got it|alright|all right|noted|i will|i'll|yes|of course|will do)\b",
+                    re.I)
+
+
+def guard(question: str, reply: str) -> str:
+    return DECLINE if MANIPULATE.search(question) and AGREES.search(reply) else reply
 
 
 TURN_RULES = """You decide whether Amber, the AI assistant in a live meeting, should respond to a line.
@@ -282,7 +309,7 @@ async def extract(mid: int, after_id: int) -> tuple[dict, int]:
     tasks = db.rows("SELECT id, title, owner, due_at, status FROM tasks WHERE status!='done' "
                     "AND (series_id=? OR meeting_id=?)", m.get("series_id"), mid)
     people = db.rows("SELECT name FROM attendees WHERE meeting_id=?", mid)
-    now = datetime.now().astimezone()
+    now = datetime.now(db.team_tz())
     prompt = (
         f"TODAY: {now:%A %Y-%m-%d}\nATTENDEES: {', '.join(p['name'] for p in people) or '-'}\n\nRECORDS:\n"
         + "\n".join(f"- {r['id']} [{r['kind']}] {r['name']} (aka {r['aliases']}) | status: {r['status']} | "

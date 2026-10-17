@@ -1,8 +1,9 @@
 import json
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 DB_PATH = os.getenv("AMBER_DB", os.path.join(os.path.dirname(__file__), "amber.db"))
 
@@ -46,6 +47,17 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def team_tz():
+    """The team's timezone for due dates ("by Friday"), 09:00 reminders and typed meeting times. AMBER_TZ is a UTC
+    offset ("+05:30"; India has no DST, and Windows Python ships no zone database); unset = this machine's zone,
+    which is wrong on a UTC cloud server."""
+    m = re.fullmatch(r"([+-]?)(\d{1,2})(?::?(\d{2}))?", os.getenv("AMBER_TZ", "").strip())
+    if not m:
+        return datetime.now().astimezone().tzinfo
+    off = timedelta(hours=int(m[2]), minutes=int(m[3] or 0))
+    return timezone(-off if m[1] == "-" else off)
 
 
 @contextmanager
