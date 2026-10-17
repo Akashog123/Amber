@@ -107,6 +107,10 @@ def route(conv: Conversation, speaker: str, text: str, addressed: bool, names_ot
             return Route("merge", "correction while the answer was being prepared", text, cancel)
         if question_pending(" ".join(q["parts"])):
             return Route("merge", 'the question after just "Amber,"', text, cancel)
+        if not opens and not q["parts"][-1].rstrip().endswith((".", "?", "!", "।")):
+            # The ASR punctuates finished sentences, so this one was cut mid-way (live: "Amber, the Grundfos pump
+            # shipment got" + "out by three weeks." was judged as two lines). The next line finishes it.
+            return Route("merge", "finishing the sentence she was waiting on", text, cancel)
         if asks and not addressed and not opens:
             return Route("merge", "rest of the same question", text, cancel)
         if addressed or opens:
@@ -145,8 +149,10 @@ if __name__ == "__main__":
     c.pending["A"] = {"parts": ["Amber, who owns the chiller service"], "generating": True}
     assert route(c, "A", "contract?", False, False, 0).action == "merge"
     assert route(c, "A", "and when does it arrive?", False, False, 0).action == "queue"
-    assert route(c, "A", "yeah do that one", False, False, 0).action == "classify"
+    assert route(c, "A", "yeah do that one", False, False, 0).action == "merge"  # the cut sentence goes on
     assert route(c, "A", "yeah do that one", True, False, 0, judged=True).action == "merge"  # one question, one answer
+    c.pending["A"] = {"parts": ["Amber, the Grundfos pump shipment got"], "generating": True}
+    assert route(c, "A", "out by three weeks.", False, False, 0).action == "merge"  # sentence cut mid-way
     c.pending.clear()
     c.followups["A"] = (10.0, False)
     assert route(c, "A", "Rahul, please send it", False, True, 5).action == "ignore"

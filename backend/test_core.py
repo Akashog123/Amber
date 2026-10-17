@@ -504,6 +504,23 @@ with c.websocket_connect(f"/ws/media?m={D}&token=t") as page:
     c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "Akash", "neither")).raise_for_status()
     assert next_json(page) == {"type": "hand", "on": False}
 main.HAND_WAIT = 0
+
+# Answering her record question in plain words (live: "Not that one. The other one" left the hand up and no note).
+c.portal.call(main.apply_extraction, D, {"record_notes": [{**pump_note, "note": "Booster pump slipped"}]})
+assert "YOUR OPEN QUESTION" in brain.build_context(D)
+brain.answer = lambda *a, **k: asyncio.sleep(0, "[[RECORD PO-1046]] Got it, noted on PO-1046.")
+say(d["bot_id"], "Akash", "Amber, not that one, the other one")
+time.sleep(0.6)
+assert replies(D)[0][-1] == "Got it, noted on PO-1046.", replies(D)[0][-1]
+assert db.row("SELECT note FROM record_notes WHERE record_id='PO-1046' ORDER BY id DESC LIMIT 1")["note"] == "Booster pump slipped"
+assert c.get(f"/api/meetings/{D}").json()["hand_raised"] is None
+brain.answer = lambda *a, **k: asyncio.sleep(0, "[[RECORD PO-9999]] Noted.")  # not an option: never written
+c.portal.call(main.apply_extraction, D, {"record_notes": [{**pump_note, "note": "Another slip"}]})
+say(d["bot_id"], "Akash", "Amber, the third one")
+time.sleep(0.6)
+assert c.get(f"/api/meetings/{D}").json()["hand_raised"] is not None
+c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "Akash", "neither")).raise_for_status()
+brain.answer = fake_answer
 assert c.get("/media/amber").status_code == 200 and "amberStats" in c.get("/media/amber").text
 assert c.get("/media/amber", headers={"cf-connecting-ip": "1.2.3.4"}).status_code == 200  # Recall loads it via the tunnel
 os.environ["ELEVENLABS_API_KEY"] = ""

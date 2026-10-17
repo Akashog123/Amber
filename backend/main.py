@@ -806,6 +806,12 @@ async def _answer(mid: int, speaker: str, q: dict, delay: float, via_chat: bool)
         text = brain.SORRY
     if HINDI.search(question) and text in (brain.FALLBACK, brain.SORRY):  # models keep the fixed lines in English
         text = brain.FALLBACK_HI if text == brain.FALLBACK else brain.SORRY_HI
+    if m := brain.RECORD_TAG.match(text):
+        # They answered her open record question in their own words ("not that one, the other"): settle it the
+        # same way as a typed "2". A record outside the question's options is ignored, never written.
+        text, pick = text[m.end():].strip() or "Got it.", m.group(1).upper()
+        if (pc := open_confirmation(mid)) and (pick == "NONE" or pick in json.loads(pc["candidates_json"])["candidates"]):
+            settle_confirmation(mid, speaker, pc, None if pick == "NONE" else pick)
     if (action := text.strip().strip(".")) in (brain.PAUSE_TOKEN, brain.RESUME_TOKEN):
         # A recording request the phrase list missed ("hold off recording for a bit"): the model spotted it.
         q["committed"] = True
@@ -846,7 +852,9 @@ AUTO_WRITE = float(os.getenv("AMBER_AUTO_WRITE", "0.8"))   # >= this: write the 
 CONFIRM_MIN = float(os.getenv("AMBER_CONFIRM_MIN", "0.5"))  # >= this (and < AUTO_WRITE): ask first; below: ignore
 EXTRACT_EVERY = int(os.getenv("AMBER_EXTRACT_EVERY", "4"))  # new human lines between extraction passes
 RECORD_ID = re.compile(r"\b(PO|EQ)-?\s?(\d{3,4})\b", re.I)
-CHOICE_WORDS = {"1": 0, "one": 0, "first": 0, "2": 1, "two": 1, "second": 1, "3": 2, "three": 2, "third": 2}
+# "one" is a pronoun more often than a number ("that one", "the other one"): only a bare "one" picks option 1.
+CHOICE_WORDS = {"1": 0, "first": 0, "2": 1, "two": 1, "second": 1, "3": 2, "three": 2, "third": 2}
+RELATIVE = re.compile(r"\b(other|not|else|instead|another|different)\b", re.I)  # "not that one, the other": model's job
 YES = re.compile(r"^\W*(amber\W+)?(yes|yeah|yep|correct|right|that one|exactly)\b", re.I)
 NO = re.compile(r"\b(neither|none of (them|those)|no,? (it'?s )?not|ignore (it|that)|skip (it|that))\b", re.I)
 since_extract: dict[int, int] = {}
@@ -1059,21 +1067,28 @@ def resolve_confirmation(mid: int, who: str, text: str) -> bool:
     pc = open_confirmation(mid)
     if not pc:
         return False
-    data = json.loads(pc["candidates_json"])
-    cands, n = data["candidates"], data["note"]
+    cands = json.loads(pc["candidates_json"])["candidates"]
     words = re.sub(r"[^a-z0-9 ]", " ", WAKE.sub(" ", text.lower())).split()
     chosen = None
     if m := RECORD_ID.search(text):
         rid = f"{m.group(1).upper()}-{m.group(2)}"
         chosen = rid if rid in cands else None
-    if chosen is None and len(words) <= 6:  # "1", "the first one", "second": short replies only
-        idx = next((CHOICE_WORDS[w] for w in words if w in CHOICE_WORDS), None)
+    if chosen is None and len(words) <= 6 and not RELATIVE.search(text):  # "1", "the first one", "second"
+        idx = 0 if words[-2:] in (["one"], ["number", "one"], ["option", "one"]) and len(words) <= 2 else None
+        idx = idx if idx is not None else next((CHOICE_WORDS[w] for w in words if w in CHOICE_WORDS), None)
         chosen = cands[idx] if idx is not None and idx < len(cands) else None
     if chosen is None and len(cands) == 1 and YES.search(text):
         chosen = cands[0]
     declined = NO.search(text) or (len(cands) == 1 and re.match(r"^\W*no\b", text, re.I))
     if chosen is None and not declined:
         return False  # not an answer to the question
+    settle_confirmation(mid, who, pc, chosen)
+    return True
+
+
+def settle_confirmation(mid: int, who: str, pc: dict, chosen: str | None):
+    """Write the confirmed note (chosen=None: neither) and lower the hand, or raise it for the next question."""
+    n = json.loads(pc["candidates_json"])["note"]
     db.execute("UPDATE pending_confirmations SET resolved=1 WHERE id=?", pc["id"])
     if chosen:
         write_note(mid, chosen, n, 1.0)  # confirmed by a person
@@ -1086,7 +1101,6 @@ def resolve_confirmation(mid: int, who: str, text: str) -> bool:
     else:
         publish("amber.hand_lowered", mid, {})
         _spawn(media_send(mid, {"type": "hand", "on": False}))
-    return True
 
 
 # --- after the meeting: MOM, recap email, follow-up reminders -------------------
