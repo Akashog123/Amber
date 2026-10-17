@@ -397,8 +397,8 @@ def handle_event(mid: int, event: str, data: dict):
             return  # Recall re-delivered a webhook: storing (and answering) it twice would be wrong
         addressed = is_addressed(text)
         conv(mid).punctuated = conv(mid).punctuated or text.rstrip().endswith((".", "।"))  # statements end in "."
-        db.execute("INSERT INTO utterances (meeting_id,speaker,text,ts,addressed) VALUES (?,?,?,?,?)",
-                   mid, who, text, start, int(addressed))
+        db.execute("INSERT INTO utterances (meeting_id,speaker,text,ts,addressed,off_record) VALUES (?,?,?,?,?,?)",
+                   mid, who, text, start, int(addressed), off_record(mid))
         publish("transcript", mid, {"speaker": who, "text": text, "ts": start, "addressed": addressed})
         yield_floor(mid)
         # "Amber, the first one" / "PO-1046" may answer her confirmation question instead of asking a new one.
@@ -478,6 +478,7 @@ def interrupts(words: list[dict]) -> bool:
     return spoken >= BARGE_IN_SEC
 RECORD_CMD = re.compile(r"\b(stop|pause|halt|start|resume|restart|continue|unpause)\b\W+(?:\w+\W+){0,2}?"
                         r"(recording|record)\b", re.I)
+ON_OFF_RECORD = re.compile(r"\b(off|on) the record\b", re.I)
 LEAVE = re.compile(r"\b(leave|exit|drop off|drop out of|get out of|quit)\b\W+(?:\w+\W+){0,2}?(meet|meeting|call)\b"
                    r"|\byou can (go|leave)( now)?\W*$|मीटिंग (छोड़|से जाओ|से निकल)", re.I)
 GO_AHEAD = re.compile(r"\b(go ahead|what is it|what's that|you had a question|your question|raised your hand|"
@@ -629,6 +630,9 @@ def command(mid: int, who: str, text: str, via_chat: bool = False) -> bool:
     if m := RECORD_CMD.search(text):
         _spawn(record_command(mid, m.group(1).lower() in ("stop", "pause", "halt"), via_chat))
         return True
+    if m := ON_OFF_RECORD.search(text):  # "Amber, off the record" / "Amber, back on the record"
+        _spawn(record_command(mid, m.group(1).lower() == "off", via_chat))
+        return True
     if LEAVE.search(text):  # asked for 4 times live and refused: now she goes (recap follows, as with Stop)
         _spawn(leave_meeting(mid, via_chat))
         return True
@@ -652,12 +656,14 @@ def spoken_question(pc: dict) -> str:
             "Say Amber and the number, or type it in the chat.")
 
 
+def off_record(mid: int) -> int:
+    return int(bool((db.row("SELECT recording_paused FROM meetings WHERE id=?", mid) or {}).get("recording_paused")))
+
+
 async def set_recording(mid: int, pause: bool) -> bool:
-    if bot := _real_bot(mid):
-        try:
-            await (recall.pause_recording if pause else recall.resume_recording)(bot)
-        except Exception as e:
-            raise HTTPException(502, f"Recall could not {'pause' if pause else 'resume'} the recording: {e}")
+    """Off the record, not a Recall pause: Recall's pause also stops its live transcript, and Amber went deaf until
+    someone typed "resume" in chat. Recall keeps capturing (so its raw media still has this stretch); lines said
+    now are flagged and kept out of the transcript, MOM, recap, tasks and record notes."""
     db.execute("UPDATE meetings SET recording_paused=? WHERE id=?", int(pause), mid)
     publish("recording.paused" if pause else "recording.resumed", mid, {})
     return pause
@@ -666,22 +672,20 @@ async def set_recording(mid: int, pause: bool) -> bool:
 async def record_command(mid: int, pause: bool, via_chat: bool):
     paused = bool((db.row("SELECT recording_paused FROM meetings WHERE id=?", mid) or {}).get("recording_paused"))
     if pause == paused:
-        msg = "Recording is already paused." if pause else "I'm already recording."
+        msg = "We're already off the record." if pause else "We're already on the record."
     else:
         try:
-            t = time.perf_counter()
             await set_recording(mid, pause)
-            print(f"[amber] recall {'pause' if pause else 'resume'}_recording took {time.perf_counter() - t:.1f}s")
-            # Recall may stop the live transcript while paused (chat events keep coming), so the chat is the
-            # resume path that always works; a spoken "resume" also works if the transcript keeps flowing.
-            msg = ("Okay, recording paused. To resume, type 'Amber, resume recording' in the chat." if pause else
-                   "Recording resumed.")
+            msg = ("Okay, we're off the record. I'm still listening, but nothing from now on goes into the notes or "
+                   "the recap. Say 'Amber, resume recording' to go back on the record." if pause else
+                   "We're back on the record.")
         except HTTPException as e:
             print(f"[amber] {e.detail}")
             msg = "Sorry, I couldn't change the recording just now."
     await say(mid, msg, via_chat)
-    if pause and not via_chat and msg.startswith("Okay"):
-        await amber_chat(mid, "Recording paused. Type 'Amber, resume recording' here to resume.")
+    if not via_chat and msg.startswith(("Okay", "We're back")):  # visible to everyone, not just who heard her
+        await amber_chat(mid, "Off the record: nothing from now on goes into the notes or recap." if pause else
+                         "Back on the record.")
 
 
 async def leave_meeting(mid: int, via_chat: bool):
@@ -774,8 +778,8 @@ async def media_ws(ws: WebSocket):
 async def speak(mid: int, text: str, mp3: bytes | None = None, wait: bool = True):
     """Say `text` in the call and log it as Amber's line. Never raises: a voice failure must not kill the reply.
     wait=False: the caller already timed this (an answer starts slightly before its own filler ends)."""
-    db.execute("INSERT INTO utterances (meeting_id,speaker,text,ts,addressed) VALUES (?,?,?,?,0)",
-               mid, "Amber", text, None)
+    db.execute("INSERT INTO utterances (meeting_id,speaker,text,ts,addressed,off_record) VALUES (?,?,?,?,0,?)",
+               mid, "Amber", text, None, off_record(mid))
     if mid in media_sockets and os.getenv("ELEVENLABS_API_KEY"):  # streaming page: no clip to prepare
         async with voice_locks.setdefault(mid, asyncio.Lock()):
             if wait and (left := speaking_until.get(mid, 0) - time.monotonic()) > 0:

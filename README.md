@@ -21,7 +21,7 @@ when addressed (or in chat), says "I don't have that information in my current
 records" instead of guessing → extracts tasks and tags discussion to mock
 procurement/equipment records, asking first (raised hand in chat) when the words
 fit more than one record → MOM + recap email to attendees → reminder emails to
-task owners. Also: pause/resume recording by voice or chat, screen-share questions,
+task owners. Also: off-the-record mode by voice or chat, screen-share questions,
 Hindi/Hinglish, memory across meetings of the same meet type, scheduled joins,
 recording playback.
 
@@ -56,8 +56,10 @@ Notes:
 - Meet guests must be admitted by the host; Workspace meetings may block guests.
 - `AMBER_DEMO_REMINDER_MINUTES=2` sends reminders 2 minutes after the call (demo);
   leave it empty to remind 24 h before each due date.
-- While recording is paused Recall may stop the live transcript, so resume from
-  the chat ("Amber, resume recording") or the dashboard; not yet verified live.
+- "Stop recording" / "off the record" keeps Amber listening and answering, but nothing said until
+  "resume recording" / "back on the record" reaches the transcript, MOM, recap, tasks or record notes.
+  (A real Recall pause also stops its live transcript, which made her deaf.) Recall's raw media still
+  contains that stretch.
 
 ## Product model
 

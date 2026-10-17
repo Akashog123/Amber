@@ -117,9 +117,9 @@ Check results with: `curl localhost:8000/api/meetings/<id>` (tasks) and `curl lo
 
 | ID | Say / type | Pass if |
 |---|---|---|
-| L1 | "Amber, stop the recording." | She says it's paused and that you resume from chat; chat gets the same hint; dashboard shows "Recording paused". |
-| L2 | While paused, first **say** "Amber, resume recording" (tells us whether Recall still transcribes while paused), then if nothing happens type it in chat. | "Recording resumed." Note which one worked. The paused part is missing from the recording. |
-| L3 | "Amber, start recording" while already recording. | "I'm already recording." |
+| L1 | "Amber, stop the recording." (or "Amber, off the record") | She says you're off the record and she's still listening; chat gets "Off the record: …"; dashboard shows "Recording paused". |
+| L2 | While off the record, ask her something ("Amber, what's the boiler status?"), then say "Amber, resume recording". | She answers while off the record, then "We're back on the record." Nothing said in between appears in the transcript, MOM, recap, tasks or record notes. (Recall's raw video still contains it.) |
+| L3 | "Amber, start recording" while already on the record. | "We're already on the record." |
 | L4 | Dashboard: Pause recording / Resume recording button. | Same as L1/L2 without speaking. |
 
 ## M. Screen share (needs AMBER_SCREEN_VISION=1)

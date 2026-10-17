@@ -332,15 +332,34 @@ c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "
 time.sleep(0.2)
 assert c.get(f"/api/meetings/{D}").json()["hand_raised"] is None
 
-# Voice-commanded recording: pause (Amber explains how to resume, since she can't hear while paused) and resume.
+# "Stop recording" = off the record: Amber keeps listening and answering, but nothing said then reaches the
+# transcript, MOM, recap, tasks or record notes (a Recall pause would have made her deaf until "resume" in chat).
 say(d["bot_id"], "Priya", "Amber, please stop the recording")
 time.sleep(0.3)
 assert db.row("SELECT recording_paused FROM meetings WHERE id=?", D)["recording_paused"] == 1
-assert "resume recording" in replies(D)[1][-1]["text"]
+last_amber = db.row("SELECT text FROM utterances WHERE meeting_id=? AND speaker='Amber' ORDER BY id DESC LIMIT 1", D)
+assert last_amber["text"].startswith("Okay, we're off the record. I'm still listening")  # off the record itself
+assert replies(D)[1][-1]["text"].startswith("Off the record")
+asked.clear()
+say(d["bot_id"], "Priya", "Amber, what's the secret budget for the chiller?")  # she still hears and answers
+time.sleep(0.4)
+assert asked == ["Amber, what's the secret budget for the chiller?"], asked
+assert "Amber, what's the secret budget for the chiller?" in brain.build_context(D)  # usable while off the record
+upto = db.row("SELECT MAX(id) m FROM utterances WHERE meeting_id=?", D)["m"]
+assert not any("secret budget" in u["text"] for u in c.get(f"/api/meetings/{D}").json()["transcript"])
+say(d["bot_id"], "Priya", "Amber, back on the record")
+time.sleep(0.3)
+assert db.row("SELECT recording_paused FROM meetings WHERE id=?", D)["recording_paused"] == 0
+assert replies(D)[0][-1] == "We're back on the record."
+assert "secret budget" not in brain.build_context(D)  # back on: the stretch can't leak through her answers
+off = db.rows("SELECT text FROM utterances WHERE meeting_id=? AND off_record=1", D)
+assert any("secret budget" in u["text"] for u in off) and any(u["text"].startswith("Okay, we're off") for u in off)
+c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "Priya", "Amber, stop the recording")).raise_for_status()
+time.sleep(0.3)
 c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "Priya", "Amber, resume recording")).raise_for_status()
 time.sleep(0.3)
 assert db.row("SELECT recording_paused FROM meetings WHERE id=?", D)["recording_paused"] == 0
-assert replies(D)[1][-1]["text"] == "Recording resumed."
+assert replies(D)[1][-1]["text"] == "We're back on the record."
 assert c.post(f"/api/meetings/{D}/recording/pause").json() == {"paused": True}
 assert c.post(f"/api/meetings/{D}/recording/explode").status_code == 404
 c.post(f"/api/meetings/{D}/recording/resume")

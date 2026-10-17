@@ -104,17 +104,6 @@ async def stop_audio(bot_id: str):
         (await c.delete(f"/bot/{bot_id}/output_audio/")).raise_for_status()
 
 
-async def pause_recording(bot_id: str):
-    """Pauses audio/video capture (and with it the live transcript); participant and chat events keep coming."""
-    async with _client() as c:
-        (await c.post(f"/bot/{bot_id}/pause_recording/")).raise_for_status()
-
-
-async def resume_recording(bot_id: str):
-    async with _client() as c:
-        (await c.post(f"/bot/{bot_id}/resume_recording/")).raise_for_status()
-
-
 async def recording_url(bot_id: str) -> str | None:
     """Fresh (pre-signed, short-lived) download link for the mixed video, once Recall has finished it."""
     async with _client() as c:

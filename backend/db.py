@@ -77,7 +77,8 @@ def init():
         c.executescript(SCHEMA)
         # ponytail: hand-rolled migrations for DBs created before these columns; use a migration tool past a few
         for table, col, kind in [("tasks", "quote", "TEXT"), ("meetings", "recording_paused", "INTEGER DEFAULT 0"),
-                                 ("meetings", "join_at", "TEXT"), ("meetings", "extracted_upto", "INTEGER DEFAULT 0")]:
+                                 ("meetings", "join_at", "TEXT"), ("meetings", "extracted_upto", "INTEGER DEFAULT 0"),
+                                 ("utterances", "off_record", "INTEGER DEFAULT 0")]:
             if col not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
 
@@ -105,7 +106,7 @@ def meeting_detail(meeting_id: int) -> dict | None:
     for key, sql in {
         "attendees": "SELECT name, email FROM attendees WHERE meeting_id=?",
         "participants": "SELECT name, joined_at, left_at FROM participants WHERE meeting_id=? ORDER BY id",
-        "transcript": "SELECT speaker, text, ts, addressed FROM utterances WHERE meeting_id=? ORDER BY id",
+        "transcript": "SELECT speaker, text, ts, addressed FROM utterances WHERE meeting_id=? AND off_record=0 ORDER BY id",
         "chat": "SELECT sender, text, ts, is_amber FROM chat WHERE meeting_id=? ORDER BY id",
         "tasks": "SELECT * FROM tasks WHERE meeting_id=? ORDER BY id",
         "record_notes": "SELECT * FROM record_notes WHERE meeting_id=? ORDER BY id",
