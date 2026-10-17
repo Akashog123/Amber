@@ -574,7 +574,7 @@ asked.clear()
 say(d["bot_id"], "Priya", "Amber, what's the boiler status")
 say(d["bot_id"], "Priya", "Sorry, forget about that. Amber, have we ordered the PPE kits?")
 time.sleep(0.5)
-assert asked == ["Amber, have we ordered the PPE kits"], asked
+assert asked == ["Amber, have we ordered the PPE kits?"], asked
 asked.clear()
 say(d["bot_id"], "Priya", "Amber, what's the boiler status")
 say(d["bot_id"], "Priya", "oh forget it")
@@ -856,4 +856,43 @@ c.post("/webhooks/recall?token=t", json={"event": "participant_events.join", "da
 time.sleep(0.3)
 assert main._attendee_email(again["id"], "Abhishek Kumar") == "abhishek@example.com"
 assert not any("Hi Abhishek" in x["text"] for x in replies(again["id"])[1])
+print("ok")
+
+# Engagement: past the follow-up window she's still in the conversation; anyone can continue without her name, and
+# it ends on evidence (lines for other people, "that's all"), not a timer. "Join the conversation" is the fallback.
+verdicts = []
+
+
+async def judge(mid, speaker, line, talking_with=()):
+    verdicts.append(line)
+    return "amber" if "booster" in line.lower() else "others"
+
+real_judge, brain.is_for_amber, brain.answer = brain.is_for_amber, judge, fake_answer
+old_followup, main.FOLLOWUP = main.FOLLOWUP, 0.1
+en = c.post("/api/meetings/dispatch", json={"title": "engage", "url": "https://meet.google.com/e", "replay": True}).json()
+asked.clear()
+say(en["bot_id"], "Akash", "Amber, what's the status of PO-1041?")
+time.sleep(0.6)  # answered; the 0.1 s follow-up window is long gone
+say(en["bot_id"], "Priya", "and the booster pump order from the same vendor")  # Priya joins the thread
+time.sleep(0.6)
+assert asked == ["Amber, what's the status of PO-1041?", "and the booster pump order from the same vendor"], asked
+for line in ("Rahul, can you call the vendor today", "we should also check the invoice copy",
+             "yes I will send the invoice copy later"):
+    say(en["bot_id"], "Akash", line)
+    time.sleep(0.3)
+assert not main.conv(en["id"]).engaged(time.monotonic())  # three lines for each other: they've moved on
+verdicts.clear()
+say(en["bot_id"], "Priya", "and what about the booster pump installation date")
+time.sleep(0.4)
+assert verdicts == [] and asked[-1] != "and what about the booster pump installation date"  # no model call, ignored
+say(en["bot_id"], "Akash", "Amber, join the conversation")
+time.sleep(0.4)
+assert main.conv(en["id"]).joined and replies(en["id"])[0][-1].startswith("Sure, I'll follow the conversation")
+say(en["bot_id"], "Priya", "the booster pump installation, when is it planned")
+time.sleep(0.6)
+assert asked[-1] == "the booster pump installation, when is it planned", asked
+say(en["bot_id"], "Akash", "okay that's all")
+time.sleep(0.4)
+assert not main.conv(en["id"]).joined and replies(en["id"])[0][-1] == "Okay, I'll wait for my name again."
+main.FOLLOWUP, brain.is_for_amber = old_followup, real_judge
 print("ok")

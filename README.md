@@ -21,7 +21,10 @@ when addressed (or in chat), says "I don't have that information in my current
 records" instead of guessing → extracts tasks and tags discussion to mock
 procurement/equipment records, asking first (raised hand in chat) when the words
 fit more than one record → MOM + recap email to attendees → reminder emails to
-task owners. Also: off-the-record mode by voice or chat, screen-share questions,
+task owners. Her name starts a conversation; after that people (anyone in the thread)
+just keep talking to her until it ends: "that's all", the room turning to each other,
+or a long pause ("Amber, join the conversation" keeps her in until "that's all").
+Also: off-the-record mode by voice or chat, screen-share questions,
 Hindi/Hinglish, memory across meetings of the same meet type, scheduled joins,
 recording playback.
 

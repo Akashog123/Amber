@@ -10,10 +10,18 @@ and why. No I/O here, so the whole policy is readable (and testable) in one plac
                                            bare "Amber,"), queue (a new question of its own), or classify
   - shortly after she answered someone  -> their follow-up needs no name; a line naming someone else is for them;
                                            anything unclear -> classify
+  - engaged (she's in a conversation)  -> a line that isn't backchannel or for someone else goes to the model, from
+                                           anyone in the call; the conversation ends on evidence, not a timer:
+                                           "that's all" / "thanks Amber", OTHERS_LIMIT lines in a row for other
+                                           people, or ENGAGE_IDLE seconds without an exchange with her
   - classify = ask the model "is this said to Amber?" (only ever inside an open state, so it stays rare)
 """
+import os
 import re
 from dataclasses import dataclass, field
+
+ENGAGE_IDLE = float(os.getenv("AMBER_ENGAGE_IDLE", "75"))  # seconds without an exchange with her: conversation over
+OTHERS_LIMIT = int(os.getenv("AMBER_OTHERS_LIMIT", "3"))  # lines in a row for other people: they've moved on
 
 WAKE = re.compile(r"\b(amber|ember|amba|ambar|umber)\b|अंबर|अम्बर|एम्बर|ऐम्बर|एंबर|ऐंबर", re.I)
 QUESTION = re.compile(r"\b(can you|could you|would you|tell me|what|what's|who|whose|when|where|how|which|"
@@ -31,6 +39,19 @@ CORRECTION = re.compile(r"\b(actually|i mean|sorry|instead|rather|wait|matlab|na
 CANCEL = re.compile(r"\b(never ?mind|forget (it|about (it|that)|that)|cancel that|scratch that|no worries|chhodo|chodo|"
                     r"rehne do|jaane do)\b|छोड़ो|छोड़िए|रहने दो|जाने दो", re.I)
 _NOISE = {"hey", "hi", "hello", "ok", "okay", "so", "um", "uh", "yo", "and", "amber"}
+# The end of a conversation with her: "that's all", "thanks Amber", "okay, moving on", "बस", "धन्यवाद".
+END = re.compile(r"\b(that'?s all|that'?s it|that will be all|that'?s enough|we'?re done|i'?m done|moving on|let'?s move on|"
+                 r"thanks?,? amber|thank you,? amber|that helps,? thanks|bas|bas itna|ho gaya|thik hai bas)\b"
+                 r"|बस इतना|बस,|धन्यवाद|शुक्रिया|हो गया", re.I)
+# Backchannel: short acknowledgements say nothing to her ("okay", "hmm", "haan", "got it", "right").
+_ACK = {"ok", "okay", "hmm", "hm", "mm", "mhmm", "uh-huh", "yeah", "yes", "yep", "right", "sure", "fine", "good", "great",
+        "nice", "cool", "got", "it", "alright", "come", "on", "wow", "great", "perfect", "thanks", "thank", "you", "haan", "han", "ji", "accha", "acha", "theek", "thik", "hai", "so", "and",
+        "हाँ", "हां", "जी", "अच्छा", "ठीक", "है", "ओके", "oh", "ah", "achha", "sahi"}
+
+
+def backchannel(text: str) -> bool:
+    words = [w for w in re.sub(r"[^a-z'\-ऀ-ॿ ]", " ", text.lower()).split() if w]
+    return len(words) <= 4 and all(w in _ACK for w in words)
 
 
 _OPENERS = {"and", "so", "okay", "ok", "also", "then", "but", "hey", "amber", "um", "uh", "acha", "accha", "toh",
@@ -53,6 +74,32 @@ def clear_question(text: str) -> bool:
     while words and words[0] in _OPENERS:
         words = words[1:]
     return bool(words) and words[0] in _ASKS
+
+
+_WH = {"what", "what's", "whats", "when", "where", "who", "whose", "which", "how", "why", "kya", "kab", "kaun", "kitna",
+       "kahan", "kaise"}
+_AUX = {"is", "are", "was", "were", "can", "could", "would", "will", "do", "does", "did", "have", "has", "should", "any"}
+_TAG = re.compile(r"\b(right|na|no|yeah|okay|ok|correct|isn'?t it|hai na)\W*\?\s*$", re.I)
+
+
+def strong_question(text: str) -> bool:
+    """A question beyond doubt, safe to answer without asking the model: a real "?" (not a tag like "..., right?"),
+    a wh-word first, or an auxiliary + you/we/it ("can you check", "do we have"). "Have a question about the
+    record" / "Should be shown only when..." are statements (answered live as follow-ups)."""
+    words = [w.strip(",.!?") for w in text.lower().split()]
+    while words and words[0] in _OPENERS:
+        words = words[1:]
+    if not words:
+        return False
+    if words[0] in _WH or HINDI_ASKS.search(text):
+        return True
+    if words[0] in _AUX and len(words) > 1 and words[1] in {"you", "we", "it", "they", "there", "i", "he", "she"}:
+        return True
+    return text.rstrip().endswith("?") and not _TAG.search(text)
+
+
+def content_words(text: str) -> int:
+    return sum(w not in _NOISE and w not in _ACK for w in re.sub(r"[^a-z'ऀ-ॿ ]", " ", WAKE.sub(" ", text.lower())).split())
 
 
 def has_content(text: str) -> bool:
@@ -84,6 +131,27 @@ class Conversation:
     # The ASR here punctuates finished sentences (seen on a real line), so an unpunctuated one was cut mid-way.
     # Typed / replayed lines often carry no punctuation at all: then "no full stop" means nothing.
     punctuated: bool = False
+    # Engagement: she's in a conversation until evidence ends it (see the module doc), not a fixed timer.
+    engaged_until: float = 0.0  # idle cap, pushed on by every exchange with her
+    engaged_with: set[str] = field(default_factory=set)
+    others_streak: int = 0  # lines in a row meant for other people
+    joined: bool = False  # "Amber, join the conversation": no idle/streak end, only "that's all"
+
+    def engaged(self, now: float) -> bool:
+        return self.joined or now < self.engaged_until
+
+    def engage(self, speaker: str, now: float):
+        self.engaged_until, self.others_streak = now + ENGAGE_IDLE, 0
+        self.engaged_with.add(speaker)
+
+    def disengage(self):
+        self.engaged_until, self.others_streak, self.joined = 0.0, 0, False
+        self.engaged_with.clear()
+
+    def for_others(self):
+        self.others_streak += 1
+        if self.others_streak >= OTHERS_LIMIT and not self.joined:
+            self.disengage()
 
 
 @dataclass
@@ -92,6 +160,7 @@ class Route:
     why: str
     text: str
     cancel: bool = False  # withdraw the speaker's pending question first
+    effect: str = ""  # "end": the conversation with her is over; "other": a line for someone else (main applies it)
 
 
 def route(conv: Conversation, speaker: str, text: str, addressed: bool, names_other: bool, now: float,
@@ -100,7 +169,7 @@ def route(conv: Conversation, speaker: str, text: str, addressed: bool, names_ot
     q = conv.pending.get(speaker)
     cancel = False
     if m := CANCEL.search(text):
-        rest = text[m.end():].strip(" ,.!?")
+        rest = text[m.end():].lstrip(" ,.!?")  # keep its own "?": a stripped one looks unfinished
         if not (has_content(rest) and (WAKE.search(rest) or QUESTION.search(rest))):
             return Route("ignore", "withdrew the question" if q else "cancel phrase, nothing pending", text, bool(q))
         # "Forget that. Amber, have we ordered the PPE kits?": drop the old question, keep the new one
@@ -139,16 +208,26 @@ def route(conv: Conversation, speaker: str, text: str, addressed: bool, names_ot
     if addressed and not judged and ABOUT_HER.search(text):
         return Route("classify", "talked about Amber, maybe not to her", text, cancel)
     if addressed:
-        return Route("start", "said her name", text, cancel)
+        return Route("start", "said her name", text, cancel, "end" if END.search(text) else "")
     until, prompted = conv.followups.get(speaker, (0.0, False))
     if answering or now < until:
         if names_other:
             return Route("ignore", "addressed to someone else", text, cancel)
         if prompted:
             return Route("start", 'the question after she said "yes?"', text, cancel)
-        if standalone:
+        if strong_question(text):
             return Route("start", "follow-up, no name needed", text, cancel)
         return Route("classify", "unclear line right after she answered them", text, cancel)
+    if conv.engaged(now):
+        if END.search(text):
+            return Route("ignore", "they wrapped up the conversation with her", text, cancel, "end")
+        if names_other:
+            return Route("ignore", "addressed to someone else", text, cancel, "other")
+        if backchannel(text) or not has_content(text):
+            return Route("ignore", "acknowledgement", text, cancel)
+        if content_words(text) < 3 and not strong_question(text):  # "Basic", "demo script": not worth a model call
+            return Route("ignore", "a fragment, not a request", text, cancel)
+        return Route("classify", "in a conversation with her: the model judges", text, cancel)
     if now < conv.spoke_until and (standalone or CORRECTION.search(text)) and not names_other:
         # "and the booster pump?" / "actually, I mean the centrifugal pump" from another person, just after she spoke
         return Route("classify", "someone else's question or correction right after Amber spoke", text, cancel)
@@ -190,6 +269,25 @@ if __name__ == "__main__":
     c.spoke_until = 8.0
     assert route(c, "B", "and the booster pump?", False, False, 5).action == "classify"  # just after she spoke
     assert route(c, "B", "let's move on", False, False, 5).action == "ignore"
+    # Engagement: beyond the follow-up window but still in the conversation, anyone's line goes to the model
+    e = Conversation()
+    e.engage("A", 0)
+    assert route(e, "B", "and what about the booster pump", False, False, 40).action == "classify"  # group thread
+    assert route(e, "A", "okay", False, False, 40).why == "acknowledgement"
+    assert route(e, "A", "Rahul, can you call them", False, True, 40).effect == "other"
+    assert route(e, "A", "okay that's all, thanks", False, False, 40).effect == "end"
+    assert route(e, "A", "Thanks Amber, that helps.", True, False, 40).effect == "end"
+    assert route(e, "A", "and the booster pump?", False, False, 80).action == "ignore"  # idle: conversation over
+    for _ in range(OTHERS_LIMIT):
+        e.for_others()
+    assert not e.engaged(10)
+    e.joined = True
+    assert e.engaged(10_000) and route(e, "B", "what about the PPE kits", False, False, 10_000).action == "classify"
+    assert backchannel("haan haan") and backchannel("Okay, got it.") and not backchannel("okay and the seals?")
+    assert strong_question("and when does it arrive") and strong_question("can you check the PO")
+    assert not strong_question("Have a question about the record.") and not strong_question("I recall when I hear. Right?")
+    assert not strong_question("Should be shown only when it is") and strong_question("Is the PO approved?")
+    assert route(e, "B", "demo script", False, False, 10_000).why == "a fragment, not a request"
     assert question_pending("Amber,") and question_pending("Listen, we can't wait. Amber,")
     assert not question_pending("Amber, what's the ETA") and not question_pending("thanks Amber, that helps.")
     assert clear_question("and when does it arrive") and clear_question("okay, is it delivered")

@@ -30,8 +30,8 @@ import brain  # noqa: E402
 import mailer  # noqa: E402
 import seed  # noqa: E402
 import voice  # noqa: E402
-from turns import (CANCEL, CORRECTION, HINDI, QUESTION, WAKE, Conversation, ends_sentence, has_content,  # noqa: E402
-                   question_pending, route)
+from turns import (CANCEL, CORRECTION, END, HINDI, QUESTION, WAKE, Conversation, clear_question,  # noqa: E402
+                   content_words, ends_sentence, has_content, question_pending, route, strong_question)
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -310,7 +310,7 @@ def forget(mid: int):
     for q in (convs.pop(mid, None) or Conversation()).pending.values():
         if q.get("task"):
             q["task"].cancel()
-    for d in (filler_until, last_filler, speaking_until, since_extract, screens, voice_locks):
+    for d in (filler_until, last_filler, speaking_until, since_extract, screens, voice_locks, engagement_shown):
         d.pop(mid, None)
     email_asked.difference_update({k for k in email_asked if k[0] == mid})
 
@@ -478,6 +478,9 @@ def interrupts(words: list[dict]) -> bool:
     return spoken >= BARGE_IN_SEC
 RECORD_CMD = re.compile(r"\b(stop|pause|halt|start|resume|restart|continue|unpause)\b\W+(?:\w+\W+){0,2}?"
                         r"(recording|record)\b", re.I)
+JOIN = re.compile(r"\b(join (the|this|our) (conversation|discussion|meeting|call)|stay with us|listen in|"
+                  r"follow (along|the conversation)|be part of (the|this|our) (conversation|discussion)|jump in)\b"
+                  r"|बातचीत में (शामिल|जुड़)", re.I)
 ON_OFF_RECORD = re.compile(r"\b(off|on) the record\b", re.I)
 LEAVE = re.compile(r"\b(leave|exit|drop off|drop out of|get out of|quit)\b\W+(?:\w+\W+){0,2}?(meet|meeting|call)\b"
                    r"|\byou can (go|leave)( now)?\W*$|मीटिंग (छोड़|से जाओ|से निकल)", re.I)
@@ -515,8 +518,17 @@ def on_speech(mid: int, speaker: str, text: str, addressed: bool, why: str = "",
               judged: bool = False):
     """`at`: when they began saying it; open windows are judged at that moment (finals arrive late)."""
     c = conv(mid)
-    r = route(c, speaker, text, addressed, names_someone_else(mid, speaker, text), at or time.monotonic(), judged)
+    now = at or time.monotonic()
+    r = route(c, speaker, text, addressed, names_someone_else(mid, speaker, text), now, judged)
     decided(mid, speaker, text, r.action, why or r.why)
+    if r.effect == "end":
+        end_conversation(mid, speaker)
+    elif r.effect == "other":
+        c.for_others()
+        engagement_changed(mid)
+    if r.action in ("start", "append", "merge", "queue") and r.effect != "end":
+        c.engage(speaker, time.monotonic())  # talking with her: the conversation goes on
+        engagement_changed(mid)
     old = c.pending.get(speaker)
     if r.cancel and old:
         old["task"].cancel()
@@ -551,16 +563,71 @@ def decided(mid: int, speaker: str, text: str, action: str, why: str):
 
 
 async def classify(mid: int, speaker: str, text: str):
-    """Unclear line while Amber is in a conversation with this speaker: let the model judge from context."""
+    """Unclear line while Amber is in a conversation: the model says amber / others / unsure from the context."""
     try:
-        to_amber = await brain.is_for_amber(mid, speaker, text)
+        verdict = await brain.is_for_amber(mid, speaker, text, sorted(conv(mid).engaged_with))
     except Exception as e:  # model down: silence is the safe default for an unclear line
         print(f"[turn] classify failed: {e!r}")
-        to_amber = False
-    if to_amber:
+        verdict = "unsure"
+    verdict = {True: "amber", False: "others"}.get(verdict, verdict)  # (test stubs answer yes/no)
+    if verdict == "amber" and not asks_something(mid, text):
+        verdict = "unsure"  # people discussing her ("see the chat", "should only show when...") aren't asking her
+    c = conv(mid)
+    if verdict == "amber":
         on_speech(mid, speaker, text, addressed=True, why="the model judged it was said to Amber", judged=True)
+    elif verdict == "unsure" and speaker in c.engaged_with and clear_question(text):
+        # a plain question from someone she's been talking with: answering beats leaving them hanging
+        on_speech(mid, speaker, text, addressed=True, why="unsure, but a question from someone talking with her",
+                  judged=True)
     else:
-        decided(mid, speaker, text, "ignore", "the model judged it wasn't for Amber")
+        if verdict == "others":
+            c.for_others()  # enough of these in a row and the conversation with her is over
+            engagement_changed(mid)
+        decided(mid, speaker, text, "ignore", "the model judged it wasn't for Amber" if verdict == "others" else
+                "the model wasn't sure; not a question")
+
+
+# Instructions to her, in English or Hindi ("note that down", "assign it to Priya", "batao", "likh lo").
+REQUEST_VERB = re.compile(r"^\W*(?:(?:okay|ok|so|and|also|then|please|haan|acha|accha|toh|right|wait|now)\W+)*"
+                          r"(note|add|assign|check|send|tell|give|show|remind|summari[sz]e|summary|explain|list|find|"
+                          r"update|mark|set|schedule|book|call|remove|delete|change|repeat|confirm|share|look|read|"
+                          r"put|make|create|draft|write|keep|track|follow)\b|\b(batao|bataiye|bolo|boliye|karo|kijiye|"
+                          r"likho|likh lo|dikhao|bhejo|samjhao)\b|बताओ|बताइए|बोलो|बोलिए|करो|कीजिए|लिखो|लिख लो|दिखाओ|"
+                          r"भेजो|समझाओ", re.I)
+
+
+# Carrying the thread on ("and the booster pump order", "what about Line 4", "aur filter?", "the installation,
+# when is it planned").
+CONTINUES = re.compile(r"^\W*(and|also|plus|what about|how about|aur|और)\b|,\s*(what|when|where|who|which|how|why)\b", re.I)
+
+
+def asks_something(mid: int, text: str) -> bool:
+    """Does the line actually ask her for something? A real question, an instruction, or a short reply right
+    after she asked this person something ("the booster", "yes, that one")."""
+    if strong_question(text) or REQUEST_VERB.search(text) or CONTINUES.search(text) or CORRECTION.search(text):
+        return True
+    last = db.row("SELECT text FROM utterances WHERE meeting_id=? AND speaker='Amber' ORDER BY id DESC LIMIT 1", mid)
+    return bool(last and last["text"].rstrip().endswith("?") and content_words(text) <= 5)
+
+
+engagement_shown: dict[int, tuple] = {}  # meeting -> last engagement state sent to the dashboard
+
+
+def engagement_changed(mid: int):
+    """Dashboard "why" log: when she's in a conversation, and with whom (only on a change)."""
+    c = conv(mid)
+    state = (c.engaged(time.monotonic()), tuple(sorted(c.engaged_with)), c.joined)
+    if state != engagement_shown.get(mid):
+        engagement_shown[mid] = state
+        publish("amber.engaged", mid, {"on": state[0], "with": list(state[1]), "joined": state[2]})
+
+
+def end_conversation(mid: int, speaker: str):
+    c = conv(mid)
+    if c.joined:  # she was following the whole conversation: say she's back to waiting for her name
+        _spawn(say(mid, line(mid, speaker, "unjoin")))
+    c.disengage()
+    engagement_changed(mid)
 
 
 def waiting_for_more(mid: int, question: str) -> bool:
@@ -568,6 +635,33 @@ def waiting_for_more(mid: int, question: str) -> bool:
     is coming, so wait BARE_WAIT, not DEBOUNCE (live: she answered the half with "Yes, I'm listening" and the rest
     was lost). Deepgram punctuates finished sentences; typed and replayed lines often have none, so spoken only."""
     return question_pending(question) or (conv(mid).punctuated and not ends_sentence(question))
+
+
+_DEV_V = {"अ": "a", "आ": "aa", "इ": "i", "ई": "i", "उ": "u", "ऊ": "u", "ए": "e", "ऐ": "ai", "ओ": "o", "औ": "au",
+          "ऋ": "ri"}
+_DEV_M = {"ा": "a", "ि": "i", "ी": "i", "ु": "u", "ू": "u", "े": "e", "ै": "ai", "ो": "o", "ौ": "au", "ृ": "ri",
+          "ं": "n", "ँ": "n", "ः": "h", "्": ""}
+_DEV_C = dict(zip("कखगघङचछजझञटठडढणतथदधनपफबभमयरलवशषसह",
+                  "k kh g gh n ch chh j jh n t th d dh n t th d dh n p ph b bh m y r l v sh sh s h".split()))
+
+
+def to_latin(text: str) -> str:
+    """Rough Devanagari -> Latin, enough to match "अभिषेक" to the participant "Abhishek" (names only)."""
+    out, chars = [], list(text)
+    for i, ch in enumerate(chars):
+        nxt = chars[i + 1] if i + 1 < len(chars) else ""
+        if ch in _DEV_C:
+            # inherent "a" unless a vowel sign / virama follows, or the word ends (schwa deletion)
+            out.append(_DEV_C[ch] + ("" if nxt in _DEV_M or nxt == "़" or not ("ऀ" <= nxt <= "ॿ") else "a"))
+        elif ch in _DEV_M:
+            out.append(_DEV_M[ch])
+        elif ch in _DEV_V:
+            out.append(_DEV_V[ch])
+        elif ch == "़":
+            continue
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def names_someone_else(mid: int, speaker: str, text: str) -> bool:
@@ -579,8 +673,9 @@ def names_someone_else(mid: int, speaker: str, text: str) -> bool:
     # Said TO them: name first ("Rahul, please...", "so Priya can you...") or set off by a comma ("thanks, Priya").
     # A mention isn't ("...what we discussed with Abhishek last time" was ignored live as "for Abhishek"). The ASR
     # misspells names ("do you want to talk, Abhisheet?"), so they match by sound too.
-    low = text.lower()
-    said = set(re.findall(r"^\W*(?:(?:hey|hi|ok|okay|so|and|also|haan|acha)\W+)?([a-z]+)", low)
+    low = to_latin(text).lower()
+    said = set(re.findall(r"^\W*(?:(?:hey|hi|ok|okay|so|and|also|haan|acha|to)\W+)?([a-z]+)", low)
+               + re.findall(r"([a-z]+)\s+(?:ko|ji)\b", low)  # Hindi "अभिषेक को ..." / "अभिषेक जी" = to Abhishek
                + re.findall(r"(?:^|[.?!]\s*)(?:(?:hey|hi|ok|okay|so|and|also)\W+)?([a-z]+)\s*,", low)  # "x," opening a
                + re.findall(r",\s*([a-z]+)\W*$", low))  # sentence, or ", x" at the end ("and Rahul, tell me": no)
     return any(f in said or (len(f) >= 4 and any(len(w) >= 4 and SequenceMatcher(None, w, f).ratio() >= 0.8
@@ -633,6 +728,13 @@ def command(mid: int, who: str, text: str, via_chat: bool = False) -> bool:
     if m := ON_OFF_RECORD.search(text):  # "Amber, off the record" / "Amber, back on the record"
         _spawn(record_command(mid, m.group(1).lower() == "off", via_chat, who))
         return True
+    if JOIN.search(text):  # "Amber, join the conversation": follow along without her name until "that's all"
+        c = conv(mid)
+        c.joined = True
+        c.engage(who, time.monotonic())
+        engagement_changed(mid)
+        _spawn(say(mid, line(mid, who, "join"), via_chat))
+        return True
     if LEAVE.search(text):  # asked for 4 times live and refused: now she goes (recap follows, as with Stop)
         _spawn(leave_meeting(mid, via_chat, who))
         return True
@@ -679,6 +781,10 @@ LINES = {
     "on": ("We're back on the record.", "हम वापस record पर हैं।"),
     "already_off": ("We're already off the record.", "हम पहले से off the record हैं।"),
     "already_on": ("We're already on the record.", "हम पहले से record पर हैं।"),
+    "join": ("Sure, I'll follow the conversation, so you don't need to say my name. Say 'that's all, Amber' when "
+             "you're done.", "ठीक है, मैं बातचीत में साथ हूँ, अब मेरा नाम लेने की ज़रूरत नहीं। हो जाए तो 'that's all, "
+             "Amber' बोलिए।"),
+    "unjoin": ("Okay, I'll wait for my name again.", "ठीक है, अब मैं अपना नाम सुनने पर ही बोलूँगी।"),
     "leave": ("Okay, I'll leave now. The recap will be in your inbox shortly. Bye!",
               "ठीक है, मैं अब meeting छोड़ रही हूँ। Recap जल्द ही आपके inbox में होगा। Bye!"),
 }
@@ -941,6 +1047,9 @@ async def _answer(mid: int, speaker: str, q: dict, delay: float, via_chat: bool)
         # got a real answer, so "Okay. Fine." after it is not the next question (it was, live).
         conv(mid).followups[speaker] = (max(speaking_until.get(mid, 0), time.monotonic()) + FOLLOWUP,
                                         not has_content(question))
+        if not END.search(question):  # "thanks Amber, that's all" got its "you're welcome", then she's done
+            conv(mid).engage(speaker, max(speaking_until.get(mid, 0), time.monotonic()))  # idle counts from here
+            engagement_changed(mid)
     latency = {"llm": round(t_llm - t0, 2), "tts": round(t_tts - t_llm, 2), "total": round(time.perf_counter() - t0, 2)}
     print(f"[amber] {speaker}: {question!r} -> {text!r} {latency}")
     publish("amber.reply", mid, {"to": speaker, "question": question, "text": text,

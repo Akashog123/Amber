@@ -267,20 +267,33 @@ def guard(question: str, reply: str) -> str:
     return DECLINE if MANIPULATE.search(question) and AGREES.search(reply) else reply
 
 
-TURN_RULES = """You decide whether Amber, the AI assistant in a live meeting, should respond to a line.
-Amber was just talking with this speaker, so they may continue without saying her name. Answer "yes" only if the
-line asks Amber something or asks her to do something (including a follow-up like "and the other one?").
-Answer "no" if it is an acknowledgement or thanks ("okay, that works", "great"), said to the other people,
-thinking aloud, small talk, or an aside: Amber stays quiet then. One word: yes or no."""
+TURN_RULES = """You decide whether a line in a live meeting is said to Amber, the AI assistant attending it.
+Amber is in an ongoing conversation with some of the people (listed), so they, or anyone else joining the same
+thread, may talk to her without saying her name, the way people keep talking to someone in a room.
+Answer "amber" if the line asks Amber something, asks her to do something, or carries on the exchange with her (a
+follow-up like "and the other one?", "summary bolo", "why are you asking?", "can you resume it?").
+Answer "others" if it is said to the other people (instructions or questions for a colleague, people discussing
+among themselves, reacting to each other, talking ABOUT Amber), or thinking aloud.
+If AMBER's last line asked this person something, their reply to it ("the booster", "yes, that one") is "amber".
+A question that continues the topic Amber was just answering ("what about the filter element?", "the booster one
+too?", "and for Line 4?") is "amber", whoever asks it, unless it names or is clearly put to a colleague.
+Half sentences, fragments and comments about the product, the meeting or Amber herself ("see the chat", "this
+should only show when...", "suppose we both are talking") are "others", unless they clearly ask her for something.
+Answer "unsure" only if it could honestly be either. Acknowledgements ("okay", "thanks") are "others".
+Reply with one word: amber, others or unsure."""
 
 
-async def is_for_amber(mid: int, speaker: str, line: str) -> bool:
-    """Only called for unclear lines while Amber is in a conversation with `speaker` (turns.route -> classify)."""
-    recent = db.rows("SELECT speaker, text FROM utterances WHERE meeting_id=? ORDER BY id DESC LIMIT 8", mid)[::-1]
-    convo = "\n".join(f"{'Amber' if u['speaker'] == 'Amber' else u['speaker']}: {u['text']}" for u in recent)
-    out = await complete(TURN_RULES, f"RECENT LINES:\n{convo}\n\nNEW LINE from {speaker}: {line}\n\nSaid to Amber?",
-                         max_tokens=20)
-    return out.strip().lower().startswith("yes")
+async def is_for_amber(mid: int, speaker: str, line: str, talking_with: list[str] = ()) -> str:
+    """Only called for unclear lines while Amber is in a conversation (turns.route -> classify). Returns
+    "amber" / "others" / "unsure"."""
+    recent = db.rows("SELECT speaker, text FROM utterances WHERE meeting_id=? ORDER BY id DESC LIMIT 12", mid)[::-1]
+    convo = "\n".join(f"{'AMBER (the assistant)' if u['speaker'] == 'Amber' else u['speaker']}: {u['text']}"
+                      for u in recent)
+    who = ", ".join(talking_with) or "-"
+    out = await complete(TURN_RULES, f"AMBER IS TALKING WITH: {who}\n\nRECENT LINES (most recent last):\n{convo}\n\n"
+                                     f"NEW LINE from {speaker}: {line}\n\nSaid to Amber?", max_tokens=20)
+    word = (out or "").strip().lower()
+    return "amber" if word.startswith(("amber", "yes")) else "others" if word.startswith(("others", "no")) else "unsure"
 
 
 EXTRACT_RULES = """You keep the action items and the record system up to date for a live work meeting.

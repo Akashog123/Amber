@@ -1,0 +1,884 @@
+[
+ {
+  "title": "Pump and Seal Delivery Tracking",
+  "speakers": [
+   "Sandeep",
+   "Meera",
+   "Vikram"
+  ],
+  "lines": [
+   {
+    "speaker": "Sandeep",
+    "text": "Okay guys, let's see the status of the mechanical seals. Meera, what is the update from the vendor?",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "Vendor bol raha hai ki dispatch ho gaya hai but tracking is not updated yet.",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "Amber,",
+    "gap": 0.5,
+    "q": 1
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "what's the ETA on the seals from Kirloskar?",
+    "gap": 0.5,
+    "q": 1
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "and the booster pump?",
+    "gap": 5.2,
+    "q": 2
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "actually, I mean the high-pressure one, not the booster.",
+    "gap": 4.8,
+    "q": 3
+   },
+   {
+    "speaker": "Meera",
+    "text": "Right, high pressure pump is critical for the line 2.",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "Note that down,",
+    "gap": 0.5,
+    "q": 4
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "and assign it to Priya for follow-up.",
+    "gap": 5.0,
+    "q": 4
+   },
+   {
+    "speaker": "Vikram",
+    "text": "Wait, is the PO already released for that?",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "Check if the PO status is 'Approved'.",
+    "gap": 4.5,
+    "q": 5
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "Vikram, check the local store also once.",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Vikram",
+    "text": "Haan, main check karta hoon.",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "What about the gasket set?",
+    "gap": 0.5,
+    "q": 6
+   },
+   {
+    "speaker": "Meera",
+    "text": "Hmm, actually never mind, I found the email.",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "Okay thanks Amber, that's all for now.",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "Chalo, let's go to the shop floor and see the alignment.",
+    "gap": 1.5,
+    "q": null
+   },
+   {
+    "speaker": "Vikram",
+    "text": "Yeah, alignment check karna zaroori hai.",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "Wait, one more thing.",
+    "gap": 2.0,
+    "q": null
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "Amber,",
+    "gap": 0.5,
+    "q": 7
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "remind me to call the vendor at 4 PM.",
+    "gap": 4.2,
+    "q": 7
+   },
+   {
+    "speaker": "Meera",
+    "text": "Okay, now we can leave.",
+    "gap": 1.0,
+    "q": null
+   }
+  ]
+ },
+ {
+  "title": "Chiller Vibration and Service Contract Review",
+  "speakers": [
+   "Sanjay",
+   "Meera",
+   "Vikram"
+  ],
+  "lines": [
+   {
+    "speaker": "Sanjay",
+    "text": "Yaar, the chiller 2 vibration is still high.",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "Haan, alignment check kiya tha last week.",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Actually, I mean we checked the bolts but not the base.",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber,",
+    "gap": 0.5,
+    "q": 1
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "check the service contract for Chiller 2.",
+    "gap": 0.5,
+    "q": 1
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Does it cover vibration analysis?",
+    "gap": 5.2,
+    "q": 2
+   },
+   {
+    "speaker": "Meera",
+    "text": "Hmm.",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "And the response time for the vendor?",
+    "gap": 4.8,
+    "q": 3
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Note that down and assign the follow-up to Meera.",
+    "gap": 5.0,
+    "q": 4
+   },
+   {
+    "speaker": "Meera",
+    "text": "Wait, is it the annual contract or the extended one?",
+    "gap": 4.5,
+    "q": 5
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "The extended one, obviously.",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Vikram",
+    "text": "Sorry I'm late, what's happening?",
+    "gap": 1.5,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Vibration issue in Chiller 2. Amber, what about the pump seals?",
+    "gap": 0.5,
+    "q": 6
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Vikram, look at this graph.",
+    "gap": 0.5,
+    "q": null
+   },
+   {
+    "speaker": "Vikram",
+    "text": "Oh, it's peaking at 50Hz.",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Vikram",
+    "text": "The booster one too?",
+    "gap": 5.1,
+    "q": 7
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Actually, never mind, I can check the booster myself.",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "The vendor is saying ki parts will take two weeks.",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Two weeks? Yeh toh nahi chalega.",
+    "gap": 0.9,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Okay thanks Amber, that's all for now.",
+    "gap": 1.5,
+    "q": null
+   },
+   {
+    "speaker": "Vikram",
+    "text": "Chalo, let's go to the plant floor.",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "I'll bring the toolkit.",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Wait, one more thing.",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber,",
+    "gap": 0.5,
+    "q": 8
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "set a reminder for the vendor call tomorrow 10 AM.",
+    "gap": 4.7,
+    "q": 8
+   }
+  ]
+ },
+ {
+  "title": "PPE Order and Safety Audit Coordination",
+  "speakers": [
+   "Sanjay",
+   "Anjali",
+   "Vikram"
+  ],
+  "lines": [
+   {
+    "speaker": "Sanjay",
+    "text": "Okay, let's look at the safety audit findings. Anjali, safety shoes ka stock check kiya?",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Anjali",
+    "text": "Haan, but very low hai. Only five pairs left in size 9.",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber,",
+    "gap": 0.5,
+    "q": 1
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "what is the current pending order status for PPE gear?",
+    "gap": 0.5,
+    "q": 1
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "and the delivery date for the gloves?",
+    "gap": 5.2,
+    "q": 2
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Actually, I mean the chemical resistant ones, not the cotton ones.",
+    "gap": 0.8,
+    "q": 3
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Note that down, we need to prioritize the nitrile gloves for the acid plant.",
+    "gap": 4.8,
+    "q": 4
+   },
+   {
+    "speaker": "Anjali",
+    "text": "Correct. Aur safety goggles bhi order karne hain.",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Anjali",
+    "text": "Add ten units of clear goggles to that list.",
+    "gap": 4.5,
+    "q": 5
+   },
+   {
+    "speaker": "Vikram",
+    "text": "Wait, check the budget first. Humne last month hi toh mangwaye thhe.",
+    "gap": 1.5,
+    "q": null
+   },
+   {
+    "speaker": "Anjali",
+    "text": "Yeah, but these are different specs. Amber, check the cost difference between the last two vendors.",
+    "gap": 0.5,
+    "q": 6
+   },
+   {
+    "speaker": "Anjali",
+    "text": "Vikram, look at this report, the audit says our current gear is outdated.",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Vikram",
+    "text": "Oh, I see. Okay, then maybe we should...",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Vikram",
+    "text": "Actually, never mind, we can handle that later.",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Right. And assign this procurement task to Priya.",
+    "gap": 4.7,
+    "q": 7
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Okay thanks Amber, that's all for the order.",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Anjali, please make sure the site supervisor knows about the audit dates.",
+    "gap": 1.5,
+    "q": null
+   },
+   {
+    "speaker": "Anjali",
+    "text": "Haan, main call kar lungi. He was asking about the checklist.",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Hmm, checklist... right.",
+    "gap": 2.0,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber,",
+    "gap": 0.6,
+    "q": 8
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "send the latest safety audit checklist to my email.",
+    "gap": 5.1,
+    "q": 8
+   },
+   {
+    "speaker": "Anjali",
+    "text": "Perfect, that will save time.",
+    "gap": 1.0,
+    "q": null
+   }
+  ]
+ },
+ {
+  "title": "Boiler Inspection and Cooling Tower Maintenance",
+  "speakers": [
+   "Sanjay",
+   "Amit",
+   "Deepak"
+  ],
+  "lines": [
+   {
+    "speaker": "Sanjay",
+    "text": "Okay so boiler number two ka inspection finish ho gaya hai",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Amit",
+    "text": "Haan but the scaling is too much in the tubes",
+    "gap": 0.5,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber,",
+    "gap": 0.2,
+    "q": 1
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "what is the current stock of descaling chemical in the store?",
+    "gap": 0.5,
+    "q": 1
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "and the lead time for new drums?",
+    "gap": 5.2,
+    "q": 2
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "actually, I mean only for the Grade-A chemical",
+    "gap": 4.8,
+    "q": 3
+   },
+   {
+    "speaker": "Amit",
+    "text": "note that down as a priority requirement",
+    "gap": 4.5,
+    "q": 4
+   },
+   {
+    "speaker": "Amit",
+    "text": "and assign it to Priya for procurement",
+    "gap": 5.0,
+    "q": 5
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Deepak, you check the gaskets also",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Deepak",
+    "text": "Ji sir, main dekh raha hoon",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Deepak",
+    "text": "Wait, the booster pump seals also look worn out",
+    "gap": 0.5,
+    "q": null
+   },
+   {
+    "speaker": "Deepak",
+    "text": "check if we have those seals in the inventory",
+    "gap": 4.2,
+    "q": 6
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "mmhmm",
+    "gap": 0.5,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "never mind, I think we can reuse the old ones after cleaning",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Amit",
+    "text": "okay thanks Amber, that's all for the boiler",
+    "gap": 1.5,
+    "q": null
+   },
+   {
+    "speaker": "Amit",
+    "text": "Sanjay, cooling tower ki nozzles block hain",
+    "gap": 0.6,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "That's a problem, pressure drop ho jayega",
+    "gap": 0.4,
+    "q": null
+   },
+   {
+    "speaker": "Amit",
+    "text": "Bilkul, we need a full flush",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber,",
+    "gap": 0.3,
+    "q": 7
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "schedule a maintenance window for the cooling tower next Tuesday",
+    "gap": 0.5,
+    "q": 7
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "from 10 AM to 2 PM",
+    "gap": 4.7,
+    "q": 8
+   },
+   {
+    "speaker": "Amit",
+    "text": "Perfect, ab chai peete hain",
+    "gap": 1.2,
+    "q": null
+   }
+  ]
+ },
+ {
+  "title": "VFD Installation and Budget Review",
+  "speakers": [
+   "Sanjay",
+   "Meera",
+   "Amit"
+  ],
+  "lines": [
+   {
+    "speaker": "Sanjay",
+    "text": "Okay team, let's look at the VFD for the cooling tower pumps.",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "Yeah, budget thoda tight hai is baar.",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber,",
+    "gap": 0.5,
+    "q": 1
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "what's the current approved budget for the VFDs?",
+    "gap": 0.2,
+    "q": 1
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Actually, I mean the specific Capex for the pumps project.",
+    "gap": 5.2,
+    "q": 2
+   },
+   {
+    "speaker": "Meera",
+    "text": "Hmm, correct.",
+    "gap": 4.8,
+    "q": 3
+   },
+   {
+    "speaker": "Meera",
+    "text": "and the delivery timeline from Siemens?",
+    "gap": 0.5,
+    "q": 3
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amit, did you check the panel space?",
+    "gap": 5.1,
+    "q": 4
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Note that down as a pending action for Amit.",
+    "gap": 0.4,
+    "q": 4
+   },
+   {
+    "speaker": "Amit",
+    "text": "Haan, check kiya tha, it's a bit tight.",
+    "gap": 5.0,
+    "q": null
+   },
+   {
+    "speaker": "Amit",
+    "text": "and the booster pump?",
+    "gap": 0.5,
+    "q": 5
+   },
+   {
+    "speaker": "Meera",
+    "text": "Wait, never mind, I'll check the booster pump separately.",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Right. If we go for the ABB model, kitna cost difference hoga?",
+    "gap": 1.5,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "Maybe 10% less.",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber,",
+    "gap": 0.6,
+    "q": 6
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "compare the ABB and Siemens quotes.",
+    "gap": 0.3,
+    "q": 6
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Assign this comparison task to Meera in the tracker.",
+    "gap": 5.3,
+    "q": 7
+   },
+   {
+    "speaker": "Meera",
+    "text": "Theek hai, I can do that by Friday.",
+    "gap": 5.1,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Okay thanks Amber, that's all for now.",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Amit",
+    "text": "Sanjay, we should also discuss the wiring issue.",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Yeh toh bahut bada mess hai, let's see.",
+    "gap": 1.5,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "Actually, wire change karna padega.",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber,",
+    "gap": 0.8,
+    "q": 8
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "send the wiring diagram for Panel B to my email.",
+    "gap": 0.4,
+    "q": 8
+   }
+  ]
+ },
+ {
+  "title": "Air Compressor Downtime Coordination",
+  "speakers": [
+   "Sanjay",
+   "Meera",
+   "Amit"
+  ],
+  "lines": [
+   {
+    "speaker": "Sanjay",
+    "text": "Yaar this compressor 3 is acting up again, pressure drop ho raha hai continuously",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "I saw the logs, it's probably the solenoid valve",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber,",
+    "gap": 0.5,
+    "q": 1
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "check the inventory for the solenoid valve kit",
+    "gap": 0.2,
+    "q": 1
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "and the O-rings",
+    "gap": 5.2,
+    "q": 2
+   },
+   {
+    "speaker": "Meera",
+    "text": "Hmm",
+    "gap": 0.5,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Actually, I mean the high-pressure O-rings specifically",
+    "gap": 4.8,
+    "q": 3
+   },
+   {
+    "speaker": "Meera",
+    "text": "If it's not in stock, we are in trouble, production ruk jayega",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Note that down",
+    "gap": 4.5,
+    "q": 4
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "and assign a priority ticket to Amit",
+    "gap": 0.3,
+    "q": 5
+   },
+   {
+    "speaker": "Amit",
+    "text": "I'm here, I can handle it if the parts arrive by evening",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Amit",
+    "text": "Wait, what about the filter element?",
+    "gap": 4.2,
+    "q": 6
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Actually never mind, filter is fine",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amit, check the oil level once",
+    "gap": 1.5,
+    "q": null
+   },
+   {
+    "speaker": "Amit",
+    "text": "The oil level is okay, but the cooling fan is making a weird noise",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "The cooling fan?",
+    "gap": 4.7,
+    "q": 7
+   },
+   {
+    "speaker": "Meera",
+    "text": "Okay thanks Amber, that's all for now",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "Sanjay, we should check the vendor contract for the AMC",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Haan, check karo if the service was due last month",
+    "gap": 1.4,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber,",
+    "gap": 0.6,
+    "q": 8
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "who is the current service engineer for this site?",
+    "gap": 5.1,
+    "q": 8
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "and his mobile number, Meera please note it",
+    "gap": 4.4,
+    "q": 9
+   }
+  ]
+ }
+]

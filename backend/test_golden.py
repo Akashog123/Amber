@@ -66,7 +66,7 @@ def at(event: dict) -> float:
 
 
 def replay(events: list[dict], extract_script: list[dict] = (), real_classifier: bool = False,
-           ) -> tuple[list[tuple[str, str]], list[str]]:
+           count_commands: bool = False) -> tuple[list[tuple[str, str]], list[str]]:
     """Returns (answered questions, records a person confirmed). extract_script: what the extraction model
     "finds" once a line containing `after` has been said, e.g. an ambiguous record note. real_classifier: unclear
     lines go to the real model (eval_scenarios.py) instead of a stub that always says no."""
@@ -76,7 +76,7 @@ def replay(events: list[dict], extract_script: list[dict] = (), real_classifier:
     async def stub_answer(mid, speaker, question, screen_png=None):
         await asyncio.sleep(ANSWER_SEC / SPEED)
         answered.append((speaker, question))  # only answers that weren't cancelled/restarted along the way
-        return "ok"
+        return f"Here is what I have on that: {question[:80]}"  # like a real answer, it carries the topic
 
     async def stub_extract(mid, after):
         new = db.rows("SELECT id, text FROM utterances WHERE meeting_id=? AND id>? AND speaker!='Amber'", mid, after)
@@ -86,12 +86,22 @@ def replay(events: list[dict], extract_script: list[dict] = (), real_classifier:
         return (hit or {}).get("result", {}), (new[-1]["id"] if new else after)
 
     brain.answer = stub_answer
+    brain._http = None  # its kept-alive client belongs to the previous replay's (closed) event loop
+    real_command = main.command
+
+    def counted_command(mid, who, text, via_chat=False):  # a command she carried out counts as handled
+        done = real_command(mid, who, text, via_chat)
+        if done and not via_chat and count_commands:
+            answered.append((who, text))
+        return done
+
+    main.command = counted_command
     brain.extract = stub_extract
     classified.clear()
 
-    async def stub_is_for_amber(mid, speaker, line):  # conservative: unclear lines aren't for her
+    async def stub_is_for_amber(mid, speaker, line, talking_with=()):  # conservative: unclear lines aren't for her
         classified.append((speaker, line))
-        return await real_is_for_amber(mid, speaker, line) if real_classifier else False
+        return await real_is_for_amber(mid, speaker, line, talking_with) if real_classifier else "others"
 
     brain.is_for_amber = stub_is_for_amber
     voice.tts = lambda text, model=None: asyncio.sleep(0, silence(REPLY_AUDIO))
@@ -119,6 +129,7 @@ def replay(events: list[dict], extract_script: list[dict] = (), real_classifier:
         mid = db.row("SELECT id FROM meetings WHERE bot_id=?", bot)["id"]
     for name in ("DEBOUNCE", "BARE_WAIT", "FOLLOWUP", "FILLER_AFTER", "FILLER_GAP"):
         setattr(main, name, getattr(main, name) * SPEED)
+    main.command = real_command
     confirmed = [n["record_id"] for n in db.rows(
         "SELECT record_id FROM record_notes WHERE meeting_id=? AND confidence=1.0 ORDER BY id", mid)]
     return answered, confirmed

@@ -7,6 +7,8 @@ and how many lines needed the model (each is an extra LLM call).
 
   uv run python eval_scenarios.py          # run the saved scenarios (evals/scenarios.json)
   uv run python eval_scenarios.py --new 4  # generate 4 new ones first (appended to the file)
+  uv run python eval_scenarios.py --file evals/live.json  # real meetings, labelled by hand (evals/label_live.py)
+  uv run python eval_scenarios.py --new-conv 4 --file evals/conversation.json  # long talks with her, name said once
 """
 import os
 import sys
@@ -43,6 +45,18 @@ Return ONLY JSON: {"scenarios": [{"title": "...", "speakers": ["Akash", "Priya",
 "lines": [{"speaker": "Akash", "text": "...", "gap": 1.0, "q": 1}]}]}"""
 
 
+CONV_RULES = GEN_RULES + """
+THIS scenario is about CONTINUOUS conversation with Amber: people say "Amber" once to start talking with her and
+then keep going WITHOUT her name for several turns, the way they would with a person in the room: follow-up
+questions, instructions ("note that down", "and assign it to Priya"), replies to her questions, short nouns
+("the booster one"). A second person joins the same thread without her name. Mix in stretches where the people
+talk only to each other (no requests; labelled null), a clear end ("okay thanks Amber, that's all", then side talk
+that must NOT be answered), and one later new thread started with her name. About a third of the lines in Hinglish
+or Hindi (Devanagari). Leave gaps of 4-6 s after each request (Amber is answering).
+LABELS: every separate question or instruction to Amber gets its OWN new "q" id; only the pieces of one sentence
+split across segments share an id. 6-10 requests per scenario, most of them without her name."""
+
+
 def to_events(sc: dict) -> list[dict]:
     """A script -> Recall-shaped events: partials word by word, then the final."""
     t, out = 0.0, []
@@ -77,11 +91,12 @@ def score(sc: dict, answered: list[tuple[str, str]]) -> dict:
     missed = [q for q, ls in asks.items() if q not in cancelled and not any(
         s == ls[-1]["speaker"] and ls[-1]["text"].lower().strip(" ?.") in a.lower() for s, a in answered)]
     false = [line["text"] for line in sc["lines"] if line.get("q") is None and len(line["text"].split()) > 1
-             and any(line["text"].lower().strip(" ?.") in a.lower() for _, a in answered)]
+             and not (g.main.WAKE.search(line["text"]) and g.main.END.search(line["text"]))  # "thanks Amber, that's
+             and any(line["text"].lower().strip(" ?.") in a.lower() for _, a in answered)]  # all" -> "you're welcome"
     return {"requests": len(asks) - len(cancelled), "missed": [asks[q][-1]["text"] for q in missed], "false": false}
 
 
-async def generate(n: int, start: int = 0) -> list[dict]:
+async def generate(n: int, start: int = 0, rules: str = GEN_RULES) -> list[dict]:
     """One scenario per call, with a long timeout (the live-answer timeout is far too short for this)."""
     model = brain.LLM_MODELS[0].partition("@")[0]
     themes = ["pump and seal deliveries", "chiller vibration and the service contract", "PPE order and safety audit",
@@ -92,7 +107,7 @@ async def generate(n: int, start: int = 0) -> list[dict]:
             r = await c.post(f"{brain.LLM_BASE_URL}/chat/completions",
                              headers={"Authorization": f"Bearer {os.getenv('LLM_API_KEY', '')}"},
                              json={"model": model, "temperature": 0.9, "max_tokens": 3000, "messages": [
-                                 {"role": "system", "content": GEN_RULES},
+                                 {"role": "system", "content": rules},
                                  {"role": "user", "content": f"Write 1 scenario about {themes[(start + i) % len(themes)]}, "
                                                              "18-26 segments."}]})
             r.raise_for_status()
@@ -101,16 +116,20 @@ async def generate(n: int, start: int = 0) -> list[dict]:
 
 
 def main():
+    global FILE
+    if "--file" in sys.argv:
+        FILE = Path(sys.argv[sys.argv.index("--file") + 1])
     saved = json.loads(FILE.read_text(encoding="utf-8")) if FILE.exists() else []
-    if sys.argv[1:2] == ["--new"]:
-        new = asyncio.run(generate(int(sys.argv[2]) if len(sys.argv) > 2 else 3, len(saved)))
+    if sys.argv[1:2] in (["--new"], ["--new-conv"]):
+        n = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 3
+        new = asyncio.run(generate(n, len(saved), CONV_RULES if sys.argv[1] == "--new-conv" else GEN_RULES))
         saved += new
         FILE.parent.mkdir(exist_ok=True)
         FILE.write_text(json.dumps(saved, ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"generated {len(new)} scenarios -> {FILE.name} ({len(saved)} total)")
     totals = {"requests": 0, "missed": 0, "false": 0, "classified": 0}
     for sc in saved:
-        answered, _ = g.replay(to_events(sc), real_classifier=True)
+        answered, _ = g.replay(to_events(sc), real_classifier=True, count_commands=True)
         r = score(sc, answered)
         totals["requests"] += r["requests"]
         totals["missed"] += len(r["missed"])
