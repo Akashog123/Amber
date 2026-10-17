@@ -826,3 +826,34 @@ time.sleep(1.5)
 assert replies(lv["id"])[0][-1].startswith("Okay, I'll leave now")
 assert c.get(f"/api/meetings/{lv['id']}").json()["status"] in ("ended", "done", "processing", "completed")
 print("ok")
+
+# Fixed lines follow the asker's language; a recording command opens their follow-up window; "leave this week"
+# (= meet, misheard) via the model's action token really leaves.
+hi = c.post("/api/meetings/dispatch", json={"title": "hi", "url": "https://meet.google.com/h", "replay": True}).json()
+say(hi["bot_id"], "Akash", "हम बस हिंदी में ही बात करेंगे आज.")
+say(hi["bot_id"], "Akash", "deadline के पहले client से मिलना है.")
+time.sleep(0.3)
+assert main.line(hi["id"], "Akash", "on") == "हम वापस record पर हैं।" and main.line(hi["id"], "Priya", "on").startswith("We're")
+say(hi["bot_id"], "Akash", "Amber, off the record")
+time.sleep(0.4)
+assert main.conv(hi["id"]).followups["Akash"][0] > time.monotonic()
+asked.clear()
+say(hi["bot_id"], "Akash", "Can you resume the recording?")  # no name: follow-up, the model hears it
+time.sleep(0.5)
+assert asked == ["Can you resume the recording?"], asked
+brain.answer = lambda *a, **k: asyncio.sleep(0, brain.LEAVE_TOKEN)
+say(hi["bot_id"], "Akash", "Amber, can you leave this week? We are done.")
+time.sleep(1.5)
+assert c.get(f"/api/meetings/{hi['id']}").json()["status"] in ("ended", "done", "processing", "completed")
+brain.answer = fake_answer
+print("ok")
+
+# A returning participant's email from an earlier meeting is reused: no second ask, and the recap reaches them.
+again = c.post("/api/meetings/dispatch", json={"title": "again", "url": "https://meet.google.com/a", "replay": True}).json()
+c.post("/webhooks/recall?token=t", json={"event": "participant_events.join", "data": {
+    "data": {"participant": {"name": "Abhishek Kumar"}, "timestamp": {"absolute": db.now()}},
+    "bot": {"id": again["bot_id"]}}}).raise_for_status()
+time.sleep(0.3)
+assert main._attendee_email(again["id"], "Abhishek Kumar") == "abhishek@example.com"
+assert not any("Hi Abhishek" in x["text"] for x in replies(again["id"])[1])
+print("ok")

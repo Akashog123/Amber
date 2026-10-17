@@ -628,13 +628,13 @@ def screen_for(mid: int, question: str) -> bytes | None:
 def command(mid: int, who: str, text: str, via_chat: bool = False) -> bool:
     """Things Amber does rather than answers. True if `text` was one."""
     if m := RECORD_CMD.search(text):
-        _spawn(record_command(mid, m.group(1).lower() in ("stop", "pause", "halt"), via_chat))
+        _spawn(record_command(mid, m.group(1).lower() in ("stop", "pause", "halt"), via_chat, who))
         return True
     if m := ON_OFF_RECORD.search(text):  # "Amber, off the record" / "Amber, back on the record"
-        _spawn(record_command(mid, m.group(1).lower() == "off", via_chat))
+        _spawn(record_command(mid, m.group(1).lower() == "off", via_chat, who))
         return True
     if LEAVE.search(text):  # asked for 4 times live and refused: now she goes (recap follows, as with Stop)
-        _spawn(leave_meeting(mid, via_chat))
+        _spawn(leave_meeting(mid, via_chat, who))
         return True
     if GO_AHEAD.search(text) and (pc := open_confirmation(mid)):
         # Permission given: ask out loud (short spoken form), so the hand's chat fallback is no longer needed.
@@ -669,27 +669,52 @@ async def set_recording(mid: int, pause: bool) -> bool:
     return pause
 
 
-async def record_command(mid: int, pause: bool, via_chat: bool):
+# Her fixed lines, in the language the asker has been speaking (live: Hindi all meeting, then an English
+# "we're off the record").
+LINES = {
+    "off": ("Okay, we're off the record. I'm still listening, but nothing from now on goes into the notes or the "
+            "recap. Say 'Amber, resume recording' to go back on the record.",
+            "ठीक है, अब हम off the record हैं। मैं सुन रही हूँ, लेकिन अब से कुछ भी notes या recap में नहीं जाएगा। "
+            "वापस record पर आने के लिए 'Amber, resume recording' बोलिए।"),
+    "on": ("We're back on the record.", "हम वापस record पर हैं।"),
+    "already_off": ("We're already off the record.", "हम पहले से off the record हैं।"),
+    "already_on": ("We're already on the record.", "हम पहले से record पर हैं।"),
+    "leave": ("Okay, I'll leave now. The recap will be in your inbox shortly. Bye!",
+              "ठीक है, मैं अब meeting छोड़ रही हूँ। Recap जल्द ही आपके inbox में होगा। Bye!"),
+}
+
+
+def line(mid: int, who: str | None, key: str) -> str:
+    recent = db.rows("SELECT text FROM utterances WHERE meeting_id=? AND speaker=? ORDER BY id DESC LIMIT 5",
+                     mid, who or "")
+    return LINES[key][1 if sum(bool(HINDI.search(u["text"])) for u in recent) >= 2 else 0]
+
+
+def open_followup(mid: int, who: str | None):
+    """After she replied to them they may go on without her name ("oh, then resume it")."""
+    if who:
+        conv(mid).followups[who] = (max(speaking_until.get(mid, 0), time.monotonic()) + FOLLOWUP, False)
+
+
+async def record_command(mid: int, pause: bool, via_chat: bool, who: str | None = None):
     paused = bool((db.row("SELECT recording_paused FROM meetings WHERE id=?", mid) or {}).get("recording_paused"))
-    if pause == paused:
-        msg = "We're already off the record." if pause else "We're already on the record."
-    else:
-        try:
-            await set_recording(mid, pause)
-            msg = ("Okay, we're off the record. I'm still listening, but nothing from now on goes into the notes or "
-                   "the recap. Say 'Amber, resume recording' to go back on the record." if pause else
-                   "We're back on the record.")
-        except HTTPException as e:
-            print(f"[amber] {e.detail}")
-            msg = "Sorry, I couldn't change the recording just now."
-    await say(mid, msg, via_chat)
-    if not via_chat and msg.startswith(("Okay", "We're back")):  # visible to everyone, not just who heard her
-        await amber_chat(mid, "Off the record: nothing from now on goes into the notes or recap." if pause else
-                         "Back on the record.")
+    changed = pause != paused
+    if changed:
+        await set_recording(mid, pause)
+    await say(mid, line(mid, who, ("off" if pause else "on") if changed else ("already_off" if pause else "already_on")),
+              via_chat)
+    if not via_chat:
+        open_followup(mid, who)  # live: "Can you resume the recording?" right after was ignored
+        if changed:  # visible to everyone, not just who heard her
+            await amber_chat(mid, "Off the record: nothing from now on goes into the notes or recap." if pause else
+                             "Back on the record.")
 
 
-async def leave_meeting(mid: int, via_chat: bool):
-    await say(mid, "Okay, I'll leave now. The recap will be in your inbox shortly. Bye!", via_chat)
+async def leave_meeting(mid: int, via_chat: bool, who: str | None = None):
+    for q in list(conv(mid).pending.values()):  # live: a queued "Yes, I'm still here" came after her goodbye
+        if q.get("task") and q["task"] is not asyncio.current_task():
+            q["task"].cancel()
+    await say(mid, line(mid, who, "leave"), via_chat)
     await asyncio.sleep(max(0, speaking_until.get(mid, 0) - time.monotonic()) + 0.5)  # let the goodbye finish
     await stop(mid)
 
@@ -885,12 +910,14 @@ async def _answer(mid: int, speaker: str, q: dict, delay: float, via_chat: bool)
         text, pick = text[m.end():].strip() or "Got it.", m.group(1).upper()
         if (pc := open_confirmation(mid)) and (pick == "NONE" or pick in json.loads(pc["candidates_json"])["candidates"]):
             settle_confirmation(mid, speaker, pc, None if pick == "NONE" else pick)
+    if text.strip().strip(".") == brain.LEAVE_TOKEN:  # "can you leave this week" (= meet): the model spotted it
+        q["committed"] = True
+        await leave_meeting(mid, via_chat, speaker)
+        return
     if (action := text.strip().strip(".")) in (brain.PAUSE_TOKEN, brain.RESUME_TOKEN):
         # A recording request the phrase list missed ("hold off recording for a bit"): the model spotted it.
         q["committed"] = True
-        await record_command(mid, action == brain.PAUSE_TOKEN, via_chat)
-        if not via_chat:  # "I'm already recording." -> "oh, then stop it" needs no name either
-            conv(mid).followups[speaker] = (max(speaking_until.get(mid, 0), time.monotonic()) + FOLLOWUP, False)
+        await record_command(mid, action == brain.PAUSE_TOKEN, via_chat, speaker)
         return
     t_llm = time.perf_counter()
     try:
@@ -1013,6 +1040,12 @@ def add_attendee(mid: int, name: str, email: str) -> bool:
 
 def ask_for_email(mid: int, who: str, email: str | None):
     if email and add_attendee(mid, who, email):
+        return
+    # Someone who gave their email in an earlier meeting isn't asked again (live: Abhishek typed it in meeting 19,
+    # was asked again in 20, didn't answer, and got no recap). Exact display name only: never guess a recipient.
+    known = db.row("SELECT email FROM attendees WHERE meeting_id!=? AND lower(name)=lower(?) AND COALESCE(email,'')!='' "
+                   "ORDER BY rowid DESC LIMIT 1", mid, who)
+    if known and not _attendee_email(mid, who) and add_attendee(mid, who, known["email"]):
         return
     if who in ("Unknown", "Amber") or (mid, who) in email_asked or _attendee_email(mid, who):
         return

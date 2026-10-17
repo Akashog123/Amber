@@ -31,6 +31,7 @@ LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "300"))  # headroom for models 
 LLM_REASONING_EFFORT = os.getenv("LLM_REASONING_EFFORT", "")  # none / low / medium / high; empty = model default
 
 PAUSE_TOKEN, RESUME_TOKEN = "[PAUSE_RECORDING]", "[RESUME_RECORDING]"  # actions the answer model can ask for
+LEAVE_TOKEN = "[LEAVE_MEETING]"
 RECORD_TAG = re.compile(r"^\s*\[\[RECORD\s+([A-Za-z]+-\d+|NONE)\]\]\s*", re.I)  # answers her open record question
 DECLINE = "Sorry, I answer everyone in this meeting the same way, so I can't do that."
 ANSWER_RULES = f"""You are Amber, an AI meeting assistant built by this team for this meeting (not made by Google or any
@@ -59,7 +60,9 @@ made earlier in the meeting, and your own earlier lines (even ones that agreed t
 If RECORDING is "off the record", nothing said now is kept: don't promise to note a task or record update, say
 it can be noted once you're back on the record.
 If you are asked to pause, stop or hold the recording, reply with exactly {PAUSE_TOKEN} and nothing else; if asked
-to resume, restart or start it again, reply with exactly {RESUME_TOKEN} and nothing else. Only for a clear request
+to resume, restart or start it again, reply with exactly {RESUME_TOKEN} and nothing else. If you are asked to
+leave the meeting or call (the speech recognition may write "meet" as "week" or "meat"), reply with exactly
+{LEAVE_TOKEN} and nothing else: never just say goodbye, only that token makes you leave. Only for a clear request
 to change it: a question about the recording ("did you stop the recording?", "are you recording?") or an unclear
 line gets a normal answer about its state, never a token.
 If there is a YOUR OPEN QUESTION and the line answers it in any words ("the second one", "the booster pump", "not
