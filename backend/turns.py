@@ -19,6 +19,9 @@ WAKE = re.compile(r"\b(amber|ember|amba|ambar|umber)\b|अंबर|अम्ब
 QUESTION = re.compile(r"\b(can you|could you|would you|tell me|what|what's|who|whose|when|where|how|which|"
                       r"why|is there|are there|do we|did we|have we|has it|status|update|please|give me|check)\b", re.I)
 HINDI = re.compile(r"[ऀ-ॿ]|\b(kya|kaun|kab|kahan|kitna|kitne|batao|bataiye|hai|hain|karo|kijiye)\b", re.I)
+# Talking ABOUT her, not to her (live: "Now Amber has a question about the recording." got "I'm ready...").
+ABOUT_HER = re.compile(r"\bamber\s+(has|had|was|will|would|should|does|did|said|says|raised|asked|wants|thought|"
+                       r"thinks|knows|needs|can't|cannot|won't)\b|\b(tell|ask)\s+amber\b", re.I)
 CORRECTION = re.compile(r"\b(actually|i mean|sorry|instead|rather|wait)\b", re.I)
 CANCEL = re.compile(r"\b(never ?mind|forget (it|about (it|that)|that)|cancel that|scratch that|no worries)\b", re.I)
 _NOISE = {"hey", "hi", "hello", "ok", "okay", "so", "um", "uh", "yo", "and", "amber"}
@@ -109,6 +112,8 @@ def route(conv: Conversation, speaker: str, text: str, addressed: bool, names_ot
         if addressed or opens:
             return Route("queue", "a second question while the first is answered", text, cancel)
         return Route("classify", "unclear line while her answer was being prepared", text, cancel)
+    if addressed and not judged and ABOUT_HER.search(text):
+        return Route("classify", "talked about Amber, maybe not to her", text, cancel)
     if addressed:
         return Route("start", "said her name", text, cancel)
     until, prompted = conv.followups.get(speaker, (0.0, False))
@@ -130,6 +135,11 @@ if __name__ == "__main__":
     c = Conversation()
     assert route(c, "A", "nice weather", False, False, 0).action == "ignore"
     assert route(c, "A", "Amber, what's up", True, False, 0).action == "start"
+    assert route(c, "A", "Now Amber has a question about the recording.", True, False, 0).action == "classify"
+    assert route(c, "A", "Amber has a question?", True, False, 0, judged=True).action == "start"  # model said yes
+    assert route(c, "A", "Amber can you check PO-1041", True, False, 0).action == "start"
+    assert route(c, "A", "What about Amber? Who owns it?", True, False, 0).action == "start"
+    assert route(c, "A", "we both are talking and Amber thought, hey", True, False, 0).action == "classify"
     c.pending["A"] = {"parts": ["Amber,"], "generating": True}
     assert route(c, "A", "have we ordered the PPE kits", False, False, 0).why == 'the question after just "Amber,"'
     c.pending["A"] = {"parts": ["Amber, who owns the chiller service"], "generating": True}
