@@ -323,7 +323,7 @@ def forget(mid: int):
     """Drop a finished meeting's live-call state (pending questions, playback clocks, screen frames)."""
     for key in [k for k in pending if k[0] == mid]:
         pending.pop(key)["task"].cancel()
-    for d in (filler_until, speaking_until, followup, since_extract, screens, voice_locks):
+    for d in (filler_until, speaking_until, followup, since_extract, screens, voice_locks, invited):
         d.pop(mid, None)
 
 
@@ -391,7 +391,7 @@ def handle_event(mid: int, event: str, data: dict):
 
     if event == "transcript.partial_data":
         # A real interruption, not a cough or "mm": two words, or one long one ("Wait", "Stop" count too).
-        if interrupts(" ".join(w.get("text", "") for w in inner.get("words") or [])):
+        if interrupts(inner.get("words") or []):
             yield_floor(mid)
         still_talking(mid, who)
     elif event == "transcript.data":
@@ -400,6 +400,9 @@ def handle_event(mid: int, event: str, data: dict):
         if not text:
             return
         start = (words[0].get("start_timestamp") or {}).get("relative")
+        if start is not None and db.row("SELECT id FROM utterances WHERE meeting_id=? AND speaker=? AND ts=? AND text=?",
+                                        mid, who, start, text):
+            return  # Recall re-delivered a webhook: storing (and answering) it twice would be wrong
         addressed = is_addressed(text)
         db.execute("INSERT INTO utterances (meeting_id,speaker,text,ts,addressed) VALUES (?,?,?,?,?)",
                    mid, who, text, start, int(addressed))
@@ -420,6 +423,9 @@ def handle_event(mid: int, event: str, data: dict):
         publish("participant.leave", mid, {"name": who, "at": ts})
     elif event == "participant_events.chat_message":
         text = (inner.get("data") or {}).get("text", "")
+        if (inner.get("timestamp") or {}).get("absolute") and db.row(
+                "SELECT id FROM chat WHERE meeting_id=? AND sender=? AND ts=? AND text=?", mid, who, ts, text):
+            return  # re-delivered webhook
         db.execute("INSERT INTO chat (meeting_id,sender,text,ts,is_amber) VALUES (?,?,?,?,0)", mid, who, text, ts)
         publish("chat", mid, {"sender": who, "text": text, "at": ts, "addressed": is_addressed(text)})
         if is_addressed(text) and command(mid, who, text, via_chat=True):
@@ -448,18 +454,20 @@ LOOKUP = re.compile(r"\b(status|orders?|ordered|owns?|owner|who|when|where|recor
                     re.I)
 CORRECTION = re.compile(r"\b(actually|i mean|sorry|instead|rather|wait)\b", re.I)
 CANCEL = re.compile(r"\b(never ?mind|forget (it|about (it|that)|that)|cancel that|scratch that|no worries)\b", re.I)
-STOP_WORDS = re.compile(r"^(no|stop|wait|hey|sorry|but|hold|amber)\W*$", re.I)
-BACKCHANNEL = {"yeah", "yes", "yep", "ok", "okay", "right", "sure", "hmm", "mm", "mhm", "uh", "um", "huh", "uh-huh",
-               "got", "it", "nice", "cool", "great", "fine", "true", "alright", "achha", "haan", "theek"}
+STOP_WORDS = re.compile(r"^(no|stop|wait|hold|amber|रुको|रुकिए)\W*$", re.I)
+BARGE_IN_SEC = float(os.getenv("AMBER_BARGE_IN_SEC", "0.7"))  # this much continuous speech = an interruption
 
 
-def interrupts(partial: str) -> bool:
-    """Someone talking over Amber, not a cough or a "yeah, okay" while she speaks."""
-    words = [w.strip(".,!?").lower() for w in partial.split()]
-    if any(STOP_WORDS.match(w) for w in words):
+def interrupts(words: list[dict]) -> bool:
+    """Someone talking over Amber, judged by how long they've been speaking (any language): a "yeah" or "mm"
+    is ~0.3s, a real interruption keeps going. "Stop" / "wait" count at once."""
+    if any(STOP_WORDS.match(w.get("text", "").strip(".,!?")) for w in words):
         return True
-    real = [w for w in words if w and w not in BACKCHANNEL]
-    return len(real) >= 2 or any(len(w) >= 4 for w in real)
+    try:
+        spoken = words[-1]["end_timestamp"]["relative"] - words[0]["start_timestamp"]["relative"]
+    except (IndexError, KeyError, TypeError):
+        return len(words) >= 3  # no timings: fall back to length
+    return spoken >= BARGE_IN_SEC
 RECORD_CMD = re.compile(r"\b(stop|pause|halt|start|resume|restart|continue|unpause)\b\W+(?:\w+\W+){0,2}?"
                         r"(recording|record)\b", re.I)
 GO_AHEAD = re.compile(r"\b(go ahead|what is it|what's that|you had a question|your question|raised your hand|"
@@ -469,6 +477,7 @@ SCREEN = re.compile(r"\b(screen|slides?|shared|sharing|showing|shown|chart|graph
 SCREEN_FRESH = 120  # seconds a screen-share frame stays usable
 screens: dict[int, tuple[str, float]] = {}  # meeting -> (latest screen-share PNG, base64; monotonic time)
 voice_locks: dict[int, asyncio.Lock] = {}  # meeting -> serializes Amber's audio clips
+invited: dict[int, set[str]] = {}          # meeting -> speakers Amber just said "yes?" to
 pending: dict[tuple[int, str], dict] = {}  # (meeting, speaker) -> {"parts": [...], "task": Task}
 filler_until: dict[int, float] = {}         # meeting -> monotonic time the current filler finishes
 speaking_until: dict[int, float] = {}       # meeting -> monotonic time Amber's audio ends
@@ -487,6 +496,7 @@ def _spawn(coro) -> asyncio.Task:
 def on_speech(mid: int, speaker: str, text: str, addressed: bool):
     key = (mid, speaker)
     q = pending.get(key)
+    in_flight = bool(q and (q.get("generating") or q.get("committed")))  # their answer is on its way
     if q and q.get("committed"):
         q = None  # that answer is already being spoken; anything new is a new question
     if m := CANCEL.search(text):
@@ -500,18 +510,28 @@ def on_speech(mid: int, speaker: str, text: str, addressed: bool):
             return
         text, addressed, q = rest, addressed or is_addressed(rest), None
     who, until = followup.get(mid, ("", 0))
-    if (not addressed and who == speaker and time.monotonic() < until and (QUESTION.search(text) or HINDI.search(text))
-            and not names_someone_else(mid, speaker, text)):
-        addressed = True  # follow-up to Amber's last answer; no need to say her name again
+    standalone = bool(QUESTION.search(text) or HINDI.search(text)) and not names_someone_else(mid, speaker, text)
+    asks = text.rstrip().endswith("?")
+    if q and q.get("generating"):
+        # Their answer is being prepared. What they say now is one of three things:
+        if CORRECTION.search(text) or (asks and not addressed and not standalone) or not has_content(" ".join(q["parts"])):
+            pass  # a correction, the tail of the same question ("...service" + "contract?"), or the actual
+            # question after just "Amber," (seen live: a 2.6 s pause, then "have we ordered the PPE kits"): merge
+        elif addressed or standalone:
+            # A new question: her name again ("Amber," + "have we ordered the PPE kits", seen live) or a question
+            # of its own ("and when does it arrive?"). The first answer finishes; this one queues behind it.
+            q, addressed = None, True
+        else:
+            return  # a statement: they've moved on, the answer stands
+    elif not addressed and (in_flight or (who == speaker and time.monotonic() < until)):
+        # Follow-up while/after Amber answers them: no need to say her name again. After a bare "Amber?" -> "Yes?"
+        # their next line is the question even without a question word ("have we ordered the PPE kits").
+        prompted = speaker in invited.get(mid, set()) and not names_someone_else(mid, speaker, text)
+        addressed = standalone or asks or prompted
+    if addressed:
+        invited.get(mid, set()).discard(speaker)
     if not (addressed or q):
         return
-    if q and q.get("generating"):
-        if not (addressed or CORRECTION.search(text)):
-            return  # answer already in flight; the asker moving on doesn't rewrite it
-        if not CORRECTION.search(text):
-            # Her name again mid-answer = a new question (seen live: "Amber," then "have we ordered the PPE kits"
-            # was folded into the chiller answer and lost). Let that answer finish; this one queues behind it.
-            q = None
     if q:
         q["task"].cancel()  # asker is still talking -> restart with the fuller question
     q = q or {"parts": []}
@@ -703,6 +723,11 @@ async def _answer(mid: int, speaker: str, q: dict, delay: float, via_chat: bool)
         text = brain.SORRY
     if HINDI.search(question) and text in (brain.FALLBACK, brain.SORRY):  # models keep the fixed lines in English
         text = brain.FALLBACK_HI if text == brain.FALLBACK else brain.SORRY_HI
+    if (action := text.strip().strip(".")) in (brain.PAUSE_TOKEN, brain.RESUME_TOKEN):
+        # A recording request the phrase list missed ("hold off recording for a bit"): the model spotted it.
+        q["committed"] = True
+        await record_command(mid, action == brain.PAUSE_TOKEN, via_chat)
+        return
     t_llm = time.perf_counter()
     try:
         mp3 = None if via_chat or not os.getenv("ELEVENLABS_API_KEY") else await voice.tts(text)
@@ -720,6 +745,8 @@ async def _answer(mid: int, speaker: str, q: dict, delay: float, via_chat: bool)
             await asyncio.sleep(max(0, filler_until.get(mid, 0) - FILLER_OVERLAP - time.monotonic()))
         await speak(mid, text, mp3 or b"", wait=not q.get("filler"))
         followup[mid] = (speaker, max(speaking_until.get(mid, 0), time.monotonic()) + FOLLOWUP)
+        if not has_content(question):  # she answered just her name ("Yes?"): the next line is for her
+            invited.setdefault(mid, set()).add(speaker)
     latency = {"llm": round(t_llm - t0, 2), "tts": round(t_tts - t_llm, 2), "total": round(time.perf_counter() - t0, 2)}
     print(f"[amber] {speaker}: {question!r} -> {text!r} {latency}")
     publish("amber.reply", mid, {"to": speaker, "question": question, "text": text,
@@ -736,9 +763,6 @@ RECORD_ID = re.compile(r"\b(PO|EQ)-?\s?(\d{3,4})\b", re.I)
 CHOICE_WORDS = {"1": 0, "one": 0, "first": 0, "2": 1, "two": 1, "second": 1, "3": 2, "three": 2, "third": 2}
 YES = re.compile(r"^\W*(amber\W+)?(yes|yeah|yep|correct|right|that one|exactly)\b", re.I)
 NO = re.compile(r"\b(neither|none of (them|those)|no,? (it'?s )?not|ignore (it|that)|skip (it|that))\b", re.I)
-# ponytail: in-memory progress; a restart re-reads the meeting (the LLM sees OPEN TASKS, and exact repeats are
-# skipped). Persist per-meeting offsets if restarts mid-meeting become common.
-extracted_upto: dict[int, int] = {}
 since_extract: dict[int, int] = {}
 extracting: set[int] = set()
 
@@ -755,8 +779,11 @@ async def run_extract(mid: int):
     extracting.add(mid)
     since_extract[mid] = 0
     try:
-        result, extracted_upto[mid] = await brain.extract(mid, extracted_upto.get(mid, 0))
+        # Progress lives with the meeting, so a backend restart mid-call doesn't re-read (and re-ask) everything.
+        after = (db.row("SELECT extracted_upto FROM meetings WHERE id=?", mid) or {}).get("extracted_upto") or 0
+        result, upto = await brain.extract(mid, after)
         await apply_extraction(mid, result)
+        db.execute("UPDATE meetings SET extracted_upto=? WHERE id=?", upto, mid)
     except Exception as e:
         print(f"[extract] meeting {mid} failed: {e!r}")
         publish("extract.error", mid, {"error": str(e)})
@@ -791,6 +818,17 @@ def _terms(text: str) -> set[str]:
             for w in re.findall(r"[a-z0-9#-]+", (text or "").lower()) if len(w) >= 3 and w not in _GENERIC}
 
 
+def _first(name: str | None) -> str:
+    return (name or "").strip().split(" ")[0].lower()
+
+
+def same_task(a: set[str], b: set[str]) -> bool:
+    """Same commitment, reworded: one title's meaningful words contain the other's ("send vendor quote" vs
+    "send the vendor quote by friday"). "...for the pump" vs "...for the chiller" differ, so both are kept."""
+    small, big = sorted((a, b), key=len)
+    return bool(small) and (small <= big if len(small) >= 2 else small == big)
+
+
 def _phrase(text: str) -> str:
     return " " + " ".join(re.findall(r"[a-z0-9#-]+", (text or "").lower())) + " "  # padded: whole-word matches
 
@@ -823,16 +861,15 @@ async def apply_extraction(mid: int, r: dict):
     if not isinstance(r, dict):
         return
     series = (db.row("SELECT series_id FROM meetings WHERE id=?", mid) or {}).get("series_id")
-    open_keys = {f"{(t['owner'] or '').lower()}|{t['title'].lower()}" for t in db.rows(
-        "SELECT owner, title FROM tasks WHERE status!='done' AND (series_id=? OR meeting_id=?)", series, mid)}
+    known = [(_first(t["owner"]), _terms(t["title"])) for t in db.rows(
+        "SELECT owner, title FROM tasks WHERE status!='done' AND (series_id=? OR meeting_id=?)", series, mid)]
     for t in r.get("tasks") or []:
         if not isinstance(t, dict) or not _clean(t.get("title")):
             continue
         title, owner = _clean(t["title"]), _clean(t.get("owner"))
-        key = f"{(owner or '').lower()}|{title.lower()}"
-        if key in open_keys:
-            continue
-        open_keys.add(key)  # also dedupes repeats within this same pass
+        if any(o == _first(owner) and same_task(words, _terms(title)) for o, words in known):
+            continue  # the model rephrased a task it already logged ("Send the vendor quote" again)
+        known.append((_first(owner), _terms(title)))  # also dedupes repeats within this same pass
         tid = db.execute("INSERT INTO tasks (meeting_id,series_id,title,owner,owner_email,due_at,status,quote) "
                          "VALUES (?,?,?,?,?,?,'open',?)", mid, series, title, owner,
                          _attendee_email(mid, owner), _date(t.get("due")), _clean(t.get("quote")))

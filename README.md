@@ -45,7 +45,10 @@ attendees as `Name, email` lines, **Send Amber**, then admit "Amber" in Meet.
 Without a Recall key (or with `"replay": true`), `uv run python replay.py` plays
 a scripted meeting through the same webhook handler; `--email you@x.com` sends
 the recap and reminder to you. Tests: `uv run python test_core.py` (prints `ok`;
-all external APIs are stubbed).
+all external APIs are stubbed) and `uv run python test_golden.py`, which replays real calls from
+`backend/golden/` at their own timing and checks which questions Amber answered. Turn any live call
+into a permanent check with `uv run python test_golden.py --add logs/recall-<bot>.jsonl <name>`,
+then edit `<name>.expect.json` to say what she should and shouldn't have answered.
 
 Notes:
 - The operator API only answers local requests; through the tunnel only

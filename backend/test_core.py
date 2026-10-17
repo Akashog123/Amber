@@ -61,8 +61,8 @@ c = TestClient(main.app)
 c.__enter__()  # keep the app's event loop alive between requests so reply tasks run
 
 
-def say(bot, who, text):
-    c.post("/webhooks/recall?token=t", json=replay.payload(bot, 0, "say", who, text)).raise_for_status()
+def say(bot, who, text):  # real call-relative time, so repeated lines aren't mistaken for re-delivered webhooks
+    c.post("/webhooks/recall?token=t", json=replay.payload(bot, time.monotonic(), "say", who, text)).raise_for_status()
 
 
 def replies(mid):
@@ -354,10 +354,17 @@ time.sleep(0.8)
 assert sorted(screens_seen, key=bool) == [None, b"\x89PNG fake"], screens_seen
 
 # Barge-in: backchannel while Amber talks doesn't cut her off; a real interruption does.
-assert not main.interrupts("Yeah.") and not main.interrupts("okay okay") and not main.interrupts("mm")
-assert main.interrupts("wait") and main.interrupts("no no") and main.interrupts("what about the pump")
-assert main.interrupts("Actually")
+def spoken(text, secs):  # words spread over `secs` seconds, like a partial transcript
+    ws = text.split()
+    step = secs / len(ws)
+    return [{"text": w, "start_timestamp": {"relative": i * step}, "end_timestamp": {"relative": (i + 1) * step}}
+            for i, w in enumerate(ws)]
 
+# Durations measured on the live call: "Yeah." 0.32s, "Sorry." 0.32s, real interruptions pass 0.8s.
+assert not main.interrupts(spoken("Yeah.", 0.32)) and not main.interrupts(spoken("Sorry.", 0.32))
+assert not main.interrupts(spoken("haan haan", 0.5))  # any language: it's the length that counts
+assert main.interrupts(spoken("What about the status", 1.28)) and main.interrupts(spoken("Wait", 0.2))
+assert main.interrupts(spoken("Amber,", 0.32)) and not main.interrupts([])
 # Her name again while she's answering = a new question, not glued onto the old one (seen live).
 async def slow_answer(mid, speaker, question, screen_png=None):
     asked.append(question)
@@ -373,7 +380,60 @@ time.sleep(0.2)
 say(d["bot_id"], "Akash", "have we ordered the PPE kits")
 time.sleep(1.8)
 assert asked == ["Hey Amber, what's the status of Chiller two?", "Amber, have we ordered the PPE kits"], asked
+# While her answer is on its way, the asker's next question needs no "Amber" and is queued, not lost;
+# a statement in between is still ignored.
+asked.clear()
+say(d["bot_id"], "Akash", "Amber, what's the status of the boiler?")
+time.sleep(0.25)
+say(d["bot_id"], "Akash", "Okay, next item is the PPE order.")
+say(d["bot_id"], "Akash", "and when is the next inspection?")
+time.sleep(1.8)
+assert asked == ["Amber, what's the status of the boiler?", "and when is the next inspection?"], asked
+# ...but the tail of the same question, cut off by the transcriber, is merged (seen live: "...service" + "contract?").
+asked.clear()
+say(d["bot_id"], "Akash", "What about Amber? Who owns the chiller service")
+time.sleep(0.25)
+say(d["bot_id"], "Akash", "contract?")
+time.sleep(1.2)
+assert asked[-1] == "What about Amber? Who owns the chiller service contract?" and len(set(asked)) == 2, asked
 brain.answer = fake_answer
+
+# Recording requests the phrase list misses are caught by the answer model's action token.
+brain.answer = lambda *a, **k: asyncio.sleep(0, brain.PAUSE_TOKEN)
+say(d["bot_id"], "Priya", "Amber, can you hold off on capturing this bit?")
+time.sleep(0.5)
+assert db.row("SELECT recording_paused FROM meetings WHERE id=?", D)["recording_paused"] == 1
+assert brain.PAUSE_TOKEN not in " ".join(replies(D)[0])  # the token itself is never spoken
+c.post(f"/api/meetings/{D}/recording/resume")
+brain.answer = fake_answer
+
+# Reworded tasks aren't logged twice; different tasks for the same person are kept.
+asyncio.run(main.apply_extraction(D, {"tasks": [{"title": "Send vendor quote for the pump", "owner": "Rahul"}]}))
+asyncio.run(main.apply_extraction(D, {"tasks": [{"title": "send the vendor quote for pumps by Friday", "owner": "Rahul Mehta"},
+                                                {"title": "Send vendor quote for the chiller", "owner": "Rahul"}]}))
+assert [t["title"] for t in db.rows("SELECT title FROM tasks WHERE meeting_id=? AND owner LIKE 'Rahul%'", D)] == \
+    ["Send vendor quote for the pump", "Send vendor quote for the chiller"]
+# Extraction progress survives a restart (stored with the meeting).
+seen_after = []
+
+
+async def advancing_extract(mid, after_id):
+    seen_after.append(after_id)
+    return {}, after_id + 7
+
+brain.extract = advancing_extract
+asyncio.run(main.run_extract(D))
+asyncio.run(main.run_extract(D))  # same process, but it reads the stored offset, as a restarted one would
+brain.extract = no_extract
+assert seen_after[1] == seen_after[0] + 7 and \
+    db.row("SELECT extracted_upto FROM meetings WHERE id=?", D)["extracted_upto"] == seen_after[0] + 14
+# A re-delivered webhook doesn't store or answer the line twice.
+asked.clear()
+dup = replay.payload(d["bot_id"], 12345.6, "say", "Akash", "Amber, who owns the boiler?")
+c.post("/webhooks/recall?token=t", json=dup).raise_for_status()
+c.post("/webhooks/recall?token=t", json=dup).raise_for_status()
+time.sleep(0.5)
+assert asked == ["Amber, who owns the boiler?"], asked
 
 # Cancel + new question in one breath (seen live): the old one is dropped, the new one answered.
 asked.clear()

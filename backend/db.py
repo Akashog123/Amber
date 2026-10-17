@@ -65,7 +65,7 @@ def init():
         c.executescript(SCHEMA)
         # ponytail: hand-rolled migrations for DBs created before these columns; use a migration tool past a few
         for table, col, kind in [("tasks", "quote", "TEXT"), ("meetings", "recording_paused", "INTEGER DEFAULT 0"),
-                                 ("meetings", "join_at", "TEXT")]:
+                                 ("meetings", "join_at", "TEXT"), ("meetings", "extracted_upto", "INTEGER DEFAULT 0")]:
             if col not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
 
