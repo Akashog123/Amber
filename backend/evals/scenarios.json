@@ -1,0 +1,848 @@
+[
+ {
+  "title": "Pump and Seal Delivery Coordination",
+  "speakers": [
+   "Akash",
+   "Priya",
+   "Rahul"
+  ],
+  "lines": [
+   {
+    "speaker": "Akash",
+    "text": "Right, so the line 4 pump is still leaking",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Priya",
+    "text": "Yeah, the mechanical seal is completely gone",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Rahul",
+    "text": "I told the vendor last week, but they are giving some weird excuse",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Akash",
+    "text": "Listen, we can't wait. Amber,",
+    "gap": 0.5,
+    "q": 1
+   },
+   {
+    "speaker": "Akash",
+    "text": "what is the current status of the seal delivery from Kirloskar?",
+    "gap": 0.4,
+    "q": 1
+   },
+   {
+    "speaker": "Priya",
+    "text": "mm-hmm",
+    "gap": 5.2,
+    "q": null
+   },
+   {
+    "speaker": "Rahul",
+    "text": "and the booster pump?",
+    "gap": 0.6,
+    "q": 2
+   },
+   {
+    "speaker": "Akash",
+    "text": "Wait, let me check the PO first",
+    "gap": 4.8,
+    "q": null
+   },
+   {
+    "speaker": "Akash",
+    "text": "Actually, I mean the centrifugal pump for the cooling tower",
+    "gap": 0.9,
+    "q": 2
+   },
+   {
+    "speaker": "Priya",
+    "text": "Wait, Rahul, did you call the transporter?",
+    "gap": 1.5,
+    "q": null
+   },
+   {
+    "speaker": "Rahul",
+    "text": "I tried, but phone switch off tha",
+    "gap": 0.7,
+    "q": null
+   },
+   {
+    "speaker": "Akash",
+    "text": "This is becoming a mess",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Priya",
+    "text": "Amber,",
+    "gap": 0.4,
+    "q": 3
+   },
+   {
+    "speaker": "Priya",
+    "text": "check the email from the vendor and Rahul, tell me if he mentioned the gate pass",
+    "gap": 0.6,
+    "q": 3
+   },
+   {
+    "speaker": "Rahul",
+    "text": "I think it was attached in the last mail",
+    "gap": 5.1,
+    "q": null
+   },
+   {
+    "speaker": "Akash",
+    "text": "Actually, never mind",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Akash",
+    "text": "I can see it here on my screen",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Priya",
+    "text": "Okay, thank god",
+    "gap": 0.9,
+    "q": null
+   },
+   {
+    "speaker": "Rahul",
+    "text": "But what about the GST invoice? If that's not ready, the security won't let it in",
+    "gap": 1.3,
+    "q": null
+   },
+   {
+    "speaker": "Akash",
+    "text": "Priya, please follow up with accounts for the payment confirmation",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Priya",
+    "text": "I'll do it right after this call",
+    "gap": 0.7,
+    "q": null
+   },
+   {
+    "speaker": "Rahul",
+    "text": "Fine, let's hope it arrives by tomorrow morning",
+    "gap": 1.2,
+    "q": null
+   }
+  ]
+ },
+ {
+  "title": "Chiller Vibration and Service Contract Review",
+  "speakers": [
+   "Sanjay",
+   "Meera",
+   "Amit"
+  ],
+  "lines": [
+   {
+    "speaker": "Sanjay",
+    "text": "Okay so we have this issue with chiller number three",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "vibration levels are way too high since Tuesday",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "Yeah it's making a weird rattling sound also",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Amit",
+    "text": "Have we checked the mounts?",
+    "gap": 0.5,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "I think so but we need to check the AMC terms",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber,",
+    "gap": 0.5,
+    "q": 1
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "can you pull up the service contract for the chillers?",
+    "gap": 0.4,
+    "q": 1
+   },
+   {
+    "speaker": "Meera",
+    "text": "Hmm",
+    "gap": 5.2,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "and the response time for emergency calls?",
+    "gap": 0.6,
+    "q": 2
+   },
+   {
+    "speaker": "Amit",
+    "text": "Actually, I mean the quarterly maintenance schedule",
+    "gap": 1.3,
+    "q": null
+   },
+   {
+    "speaker": "Amit",
+    "text": "see if they missed the last visit",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "Wait let me see",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber,",
+    "gap": 0.5,
+    "q": 3
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "check the last service date for chiller three, Amit did you get the report?",
+    "gap": 0.7,
+    "q": 3
+   },
+   {
+    "speaker": "Amit",
+    "text": "No nahi mila report abhi tak",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "Wait, maybe it's just a loose bolt",
+    "gap": 1.5,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber, search for the vibration",
+    "gap": 0.4,
+    "q": 4
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "actually never mind, I'll check the logbook manually",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Amit",
+    "text": "We should just call the vendor directly",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "But if it's not covered in the contract it will be expensive",
+    "gap": 0.9,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "True, let's see what the penalty clause says",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "if they are late for the visit",
+    "gap": 0.6,
+    "q": null
+   },
+   {
+    "speaker": "Amit",
+    "text": "Right",
+    "gap": 0.5,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "Okay let's just coordinate with the site team first",
+    "gap": 1.4,
+    "q": null
+   }
+  ]
+ },
+ {
+  "title": "PPE Procurement and Safety Audit Prep",
+  "speakers": [
+   "Sanjay",
+   "Meera",
+   "Vikram"
+  ],
+  "lines": [
+   {
+    "speaker": "Sanjay",
+    "text": "Okay, so the external safety audit is next Tuesday.",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "Yeah, but half the safety shoes are still pending from the vendor.",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Vikram",
+    "text": "Actually, I mean... maybe only the size 9s and 10s are missing.",
+    "gap": 1.5,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Doesn't matter, we need the full kit for the plant floor staff.",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "Sanjay, check the PO status once.",
+    "gap": 0.9,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Wait, let me just ask... Amber,",
+    "gap": 0.5,
+    "q": 1
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "what is the current delivery status of the PPE order from Reliable Safety?",
+    "gap": 0.2,
+    "q": 1
+   },
+   {
+    "speaker": "Meera",
+    "text": "Hmm.",
+    "gap": 5.2,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "And the high-vis jackets?",
+    "gap": 0.7,
+    "q": 2
+   },
+   {
+    "speaker": "Vikram",
+    "text": "Okay, thanks.",
+    "gap": 5.1,
+    "q": null
+   },
+   {
+    "speaker": "Vikram",
+    "text": "Meera, can you check the store inventory for the gloves?",
+    "gap": 1.3,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "I'll do it, but the stock register is a mess.",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "This is becoming a headache, ya.",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber, please send a reminder to the vendor regarding the...",
+    "gap": 0.6,
+    "q": 3
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "actually, never mind, I'll call the manager directly.",
+    "gap": 0.4,
+    "q": null
+   },
+   {
+    "speaker": "Vikram",
+    "text": "Right, because they always ignore emails.",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "Correct. Pure time-pass is going on with them.",
+    "gap": 0.9,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Anyway, we need the audit checklist ready by Friday.",
+    "gap": 1.5,
+    "q": null
+   },
+   {
+    "speaker": "Vikram",
+    "text": "I have the draft on my laptop.",
+    "gap": 0.7,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "Is it the updated version from the corporate office?",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Vikram",
+    "text": "Yes, the one sent last month.",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Cool. Let's meet tomorrow at 10 to finalize it.",
+    "gap": 1.4,
+    "q": null
+   }
+  ]
+ },
+ {
+  "title": "Pump Seal Delivery Coordination",
+  "speakers": [
+   "Akash",
+   "Priya",
+   "Rahul"
+  ],
+  "lines": [
+   {
+    "speaker": "Akash",
+    "text": "Okay, let's quickly check the status of the spares for the cooling tower pumps.",
+    "gap": 0.5,
+    "q": null
+   },
+   {
+    "speaker": "Priya",
+    "text": "Yeah, the mechanical seals are still pending from the vendor in Chennai.",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Rahul",
+    "text": "Wait, I thought they were dispatched last Tuesday?",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Priya",
+    "text": "Nahi, they said there was some quality issue with the elastomer.",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Akash",
+    "text": "This is becoming a problem, we can't keep the pump offline for another week.",
+    "gap": 1.5,
+    "q": null
+   },
+   {
+    "speaker": "Akash",
+    "text": "Amber,",
+    "gap": 0.5,
+    "q": 1
+   },
+   {
+    "speaker": "Akash",
+    "text": "what's the latest ETA on the mechanical seals from the vendor?",
+    "gap": 0.2,
+    "q": 1
+   },
+   {
+    "speaker": "Priya",
+    "text": "Hmm, let's see what she says.",
+    "gap": 5.2,
+    "q": null
+   },
+   {
+    "speaker": "Akash",
+    "text": "and the booster pump gaskets?",
+    "gap": 0.5,
+    "q": 2
+   },
+   {
+    "speaker": "Rahul",
+    "text": "Right, those are also critical.",
+    "gap": 5.1,
+    "q": null
+   },
+   {
+    "speaker": "Akash",
+    "text": "Amber, check the lead time for the impeller, and Rahul, can you verify the part number?",
+    "gap": 0.4,
+    "q": 3
+   },
+   {
+    "speaker": "Rahul",
+    "text": "Yeah, I'll check the drawing.",
+    "gap": 5.5,
+    "q": null
+   },
+   {
+    "speaker": "Priya",
+    "text": "Actually, I mean the 4-inch impeller, not the 6-inch one.",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Akash",
+    "text": "Right, the 4-inch one for the secondary line.",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Priya",
+    "text": "Uh, Amber, could you also list all pending POs for—",
+    "gap": 0.3,
+    "q": 4
+   },
+   {
+    "speaker": "Priya",
+    "text": "actually, never mind, I have the excel sheet open here.",
+    "gap": 0.6,
+    "q": null
+   },
+   {
+    "speaker": "Rahul",
+    "text": "Correct.",
+    "gap": 0.5,
+    "q": null
+   },
+   {
+    "speaker": "Akash",
+    "text": "Are we looking at a complete shutdown if these don't arrive by Friday?",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Priya",
+    "text": "Most likely, unless we can borrow a seal from the backup unit in Sector 4.",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Rahul",
+    "text": "That's risky, the backup unit is already old.",
+    "gap": 0.9,
+    "q": null
+   },
+   {
+    "speaker": "Akash",
+    "text": "Let's just push the vendor more.",
+    "gap": 1.1,
+    "q": null
+   }
+  ]
+ },
+ {
+  "title": "Chiller Vibration and Service Contract Review",
+  "speakers": [
+   "Sandeep",
+   "Megha",
+   "Vikram"
+  ],
+  "lines": [
+   {
+    "speaker": "Sandeep",
+    "text": "Okay so the Chiller 2 is still showing high vibration levels since Tuesday",
+    "gap": 0.5,
+    "q": null
+   },
+   {
+    "speaker": "Megha",
+    "text": "Yeah I saw the logs, it is like 4.5 mm per second",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "Which is too high. Humne vendor ko call kiya but they are saying it's not under the standard AMC",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Vikram",
+    "text": "Wait what? The contract should cover mechanical wear and tear",
+    "gap": 0.6,
+    "q": null
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "Amber,",
+    "gap": 0.4,
+    "q": 1
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "can you pull up the service contract for the centrifugal chillers?",
+    "gap": 0.5,
+    "q": 1
+   },
+   {
+    "speaker": "Megha",
+    "text": "Hmm",
+    "gap": 5.2,
+    "q": null
+   },
+   {
+    "speaker": "Vikram",
+    "text": "and specifically check the clause on vibration analysis",
+    "gap": 0.7,
+    "q": 2
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "Right, and Megha check if we have the previous report",
+    "gap": 5.5,
+    "q": null
+   },
+   {
+    "speaker": "Megha",
+    "text": "Looking for it... actually, I mean the June report",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "Amber,",
+    "gap": 0.4,
+    "q": 3
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "list the excluded items in the AMC",
+    "gap": 0.6,
+    "q": 3
+   },
+   {
+    "speaker": "Vikram",
+    "text": "Wait, never mind, I found the PDF on my laptop",
+    "gap": 4.8,
+    "q": null
+   },
+   {
+    "speaker": "Megha",
+    "text": "Oh okay, then we don't need that list",
+    "gap": 0.9,
+    "q": null
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "But look at page 4, the bearing replacement is only covered if it's a manufacturing defect",
+    "gap": 1.3,
+    "q": null
+   },
+   {
+    "speaker": "Vikram",
+    "text": "Yeh toh problem hai. They will call it operational wear",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Megha",
+    "text": "If we run it like this, the whole shaft might get damaged",
+    "gap": 0.7,
+    "q": null
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "Exactly. We need to push them to do a site visit first",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Vikram",
+    "text": "I will mail them and CC the regional manager",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Megha",
+    "text": "Make sure to attach the vibration logs from last week",
+    "gap": 0.5,
+    "q": null
+   },
+   {
+    "speaker": "Sandeep",
+    "text": "And tell them if it trips, the production loss is on their head",
+    "gap": 1.2,
+    "q": null
+   }
+  ]
+ },
+ {
+  "title": "PPE Procurement and Safety Audit Prep",
+  "speakers": [
+   "Sanjay",
+   "Meera",
+   "Amit"
+  ],
+  "lines": [
+   {
+    "speaker": "Sanjay",
+    "text": "Okay so the safety audit is next Tuesday",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "Yeah and we are still short on the high-vis jackets",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Amit",
+    "text": "I checked the store yesterday, sirf ten pieces left hain",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "That's not enough for the new contract staff",
+    "gap": 0.5,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber,",
+    "gap": 0.4,
+    "q": 1
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "what is the current status of the PPE purchase order?",
+    "gap": 0.2,
+    "q": 1
+   },
+   {
+    "speaker": "Meera",
+    "text": "Hmm",
+    "gap": 5.2,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "And the safety goggles?",
+    "gap": 0.6,
+    "q": 2
+   },
+   {
+    "speaker": "Amit",
+    "text": "Right, goggles are also critical",
+    "gap": 5.1,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber, check if the vendor sent the tracking ID",
+    "gap": 0.3,
+    "q": 3
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amit, you follow up with the vendor manually as well",
+    "gap": 0.7,
+    "q": null
+   },
+   {
+    "speaker": "Amit",
+    "text": "Theek hai, I will call them",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "Wait, actually, I mean the order number was PO-442, not 441",
+    "gap": 0.9,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Amber, can you—",
+    "gap": 0.5,
+    "q": 4
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "actually never mind, I can see it on the screen now",
+    "gap": 0.4,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "We also need to update the safety register",
+    "gap": 1.1,
+    "q": null
+   },
+   {
+    "speaker": "Amit",
+    "text": "Register is updated till Friday",
+    "gap": 0.8,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "But we need the training logs for the new guys",
+    "gap": 1.0,
+    "q": null
+   },
+   {
+    "speaker": "Meera",
+    "text": "I'll handle the logs",
+    "gap": 0.7,
+    "q": null
+   },
+   {
+    "speaker": "Sanjay",
+    "text": "Let's just make sure the site is clean",
+    "gap": 1.2,
+    "q": null
+   },
+   {
+    "speaker": "Amit",
+    "text": "Clearance is happening as we speak",
+    "gap": 0.9,
+    "q": null
+   }
+  ]
+ }
+]

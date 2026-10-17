@@ -10,7 +10,7 @@ import sys
 import tempfile
 
 os.environ["AMBER_DB"] = os.path.join(tempfile.mkdtemp(), "golden.db")
-for k in ("RECALL_API_KEY", "GEMINI_API_KEY", "LLM_BASE_URL", "SMTP_USER"):
+for k in ("RECALL_API_KEY", "SMTP_USER") + (() if os.getenv("GOLDEN_REAL_LLM") else ("GEMINI_API_KEY", "LLM_BASE_URL")):
     os.environ[k] = ""  # blank, not unset: main's load_dotenv() would reload real keys
 os.environ["ELEVENLABS_API_KEY"] = "stub"  # voice is stubbed below; set so Amber "speaks" and timing is real
 os.environ["WEBHOOK_TOKEN"] = "t"
@@ -34,6 +34,7 @@ MAX_GAP = 12.0    # seconds of call time
 REPLY_AUDIO = 4.0   # seconds a typical spoken answer lasts (she's "speaking" this long: barge-in, follow-up window)
 FILLER_AUDIO = 0.8
 classified: list[tuple[str, str]] = []  # unclear lines sent to the model (each is an extra LLM call)
+real_is_for_amber = brain.is_for_amber
 
 
 def silence(secs: float) -> bytes:
@@ -64,9 +65,11 @@ def at(event: dict) -> float:
     return (d.get("timestamp") or {}).get("relative") or 0
 
 
-def replay(events: list[dict], extract_script: list[dict] = ()) -> tuple[list[tuple[str, str]], list[str]]:
+def replay(events: list[dict], extract_script: list[dict] = (), real_classifier: bool = False,
+           ) -> tuple[list[tuple[str, str]], list[str]]:
     """Returns (answered questions, records a person confirmed). extract_script: what the extraction model
-    "finds" once a line containing `after` has been said, e.g. an ambiguous record note."""
+    "finds" once a line containing `after` has been said, e.g. an ambiguous record note. real_classifier: unclear
+    lines go to the real model (eval_scenarios.py) instead of a stub that always says no."""
     answered: list[tuple[str, str]] = []
     script = list(extract_script)
 
@@ -88,7 +91,7 @@ def replay(events: list[dict], extract_script: list[dict] = ()) -> tuple[list[tu
 
     async def stub_is_for_amber(mid, speaker, line):  # conservative: unclear lines aren't for her
         classified.append((speaker, line))
-        return False
+        return await real_is_for_amber(mid, speaker, line) if real_classifier else False
 
     brain.is_for_amber = stub_is_for_amber
     voice.tts = lambda text, model=None: asyncio.sleep(0, silence(REPLY_AUDIO))

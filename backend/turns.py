@@ -24,10 +24,35 @@ CANCEL = re.compile(r"\b(never ?mind|forget (it|about (it|that)|that)|cancel tha
 _NOISE = {"hey", "hi", "hello", "ok", "okay", "so", "um", "uh", "yo", "and", "amber"}
 
 
+_OPENERS = {"and", "so", "okay", "ok", "also", "then", "but", "hey", "amber", "um", "uh", "acha", "accha"}
+_ASKS = {"what", "what's", "whats", "when", "where", "who", "whose", "which", "how", "why", "is", "are", "was",
+         "were", "can", "could", "would", "will", "do", "does", "did", "have", "has", "should", "any", "kya", "kab",
+         "kaun", "kitna", "kahan"}
+
+
+def clear_question(text: str) -> bool:
+    """Unmistakably a question: ends with "?" or starts with a question word ("and when does it arrive").
+    Words like "check" or "status" alone don't count: "wait, let me check the PO" is not a question."""
+    if text.rstrip().endswith("?"):
+        return True
+    words = [w.strip(",.!") for w in text.lower().split()]
+    while words and words[0] in _OPENERS:
+        words = words[1:]
+    return bool(words) and words[0] in _ASKS
+
+
 def has_content(text: str) -> bool:
     """False for a bare "Amber" / "hey Amber": the actual question is probably still coming."""
     words = re.sub(r"[^a-z' ]", " ", WAKE.sub(" ", text.lower())).split()
     return any(w not in _NOISE for w in words)
+
+
+_ENDS_WITH_NAME = re.compile(rf"(?:{WAKE.pattern})\W*$", re.I)
+
+
+def question_pending(text: str) -> bool:
+    """Her name with nothing after it: "Amber," or "Listen, we can't wait. Amber," -> the question is coming next."""
+    return not has_content(text) or bool(_ENDS_WITH_NAME.search(text.strip()))
 
 
 @dataclass
@@ -38,6 +63,7 @@ class Conversation:
     # "yes?" to a bare "Amber", so their next line is the question even without a question word
     followups: dict[str, tuple[float, bool]] = field(default_factory=dict)
     record_answer_until: float = 0.0  # her record question was asked aloud: a bare "it's 2" counts as the answer
+    spoke_until: float = 0.0  # shortly after she speaks, anyone's clear question may be for her (the model decides)
 
 
 @dataclass
@@ -60,19 +86,20 @@ def route(conv: Conversation, speaker: str, text: str, addressed: bool, names_ot
     answering = bool(q and q.get("committed"))  # her answer to them is being spoken
     if answering:
         q = None
-    standalone = bool(QUESTION.search(text) or HINDI.search(text)) and not names_other
     asks = text.rstrip().endswith("?")
+    opens = clear_question(text.rstrip(" ?.!")) and not names_other  # starts like a question of its own
+    standalone = (asks or opens) and not names_other
 
     if q and not q.get("generating"):
         return Route("append", "still asking", text, cancel)
     if q:  # her answer is being prepared
         if CORRECTION.search(text):
             return Route("merge", "correction while the answer was being prepared", text, cancel)
-        if not has_content(" ".join(q["parts"])):
+        if question_pending(" ".join(q["parts"])):
             return Route("merge", 'the question after just "Amber,"', text, cancel)
-        if asks and not addressed and not standalone:
+        if asks and not addressed and not opens:
             return Route("merge", "rest of the same question", text, cancel)
-        if addressed or standalone:
+        if addressed or opens:
             return Route("queue", "a second question while the first is answered", text, cancel)
         return Route("classify", "unclear line while her answer was being prepared", text, cancel)
     if addressed:
@@ -83,9 +110,11 @@ def route(conv: Conversation, speaker: str, text: str, addressed: bool, names_ot
             return Route("ignore", "addressed to someone else", text, cancel)
         if prompted:
             return Route("start", 'the question after she said "yes?"', text, cancel)
-        if standalone or asks:
+        if standalone:
             return Route("start", "follow-up, no name needed", text, cancel)
         return Route("classify", "unclear line right after she answered them", text, cancel)
+    if now < conv.spoke_until and standalone:
+        return Route("classify", "someone else's question right after Amber spoke", text, cancel)
     return Route("ignore", "no name, nothing open", text, cancel)
 
 
@@ -106,4 +135,13 @@ if __name__ == "__main__":
     assert route(c, "A", "hmm okay that one", False, False, 5).action == "classify"
     assert route(c, "A", "hmm okay that one", False, False, 11).action == "ignore"
     assert route(c, "A", "oh forget it", False, False, 5).action == "ignore"
+    assert route(c, "A", "Wait, let me check the PO first", False, False, 5).action == "classify"  # not a fast "yes"
+    assert route(c, "B", "and the booster pump?", False, False, 5).action == "ignore"  # B never asked Amber
+    c.spoke_until = 8.0
+    assert route(c, "B", "and the booster pump?", False, False, 5).action == "classify"  # just after she spoke
+    assert route(c, "B", "let's move on", False, False, 5).action == "ignore"
+    assert question_pending("Amber,") and question_pending("Listen, we can't wait. Amber,")
+    assert not question_pending("Amber, what's the ETA") and not question_pending("thanks Amber, that helps.")
+    assert clear_question("and when does it arrive") and clear_question("okay, is it delivered")
+    assert not clear_question("wait, let me check the PO") and not clear_question("status looks fine")
     print("ok")

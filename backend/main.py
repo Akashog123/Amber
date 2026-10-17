@@ -29,7 +29,8 @@ import brain  # noqa: E402
 import mailer  # noqa: E402
 import seed  # noqa: E402
 import voice  # noqa: E402
-from turns import CANCEL, CORRECTION, HINDI, QUESTION, WAKE, Conversation, has_content, route  # noqa: E402
+from turns import (CANCEL, CORRECTION, HINDI, QUESTION, WAKE, Conversation, has_content, question_pending,  # noqa: E402
+                   route)
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -462,6 +463,7 @@ filler_until: dict[int, float] = {}         # meeting -> monotonic time the curr
 speaking_until: dict[int, float] = {}       # meeting -> monotonic time Amber's audio ends
 FOLLOWUP = float(os.getenv("AMBER_FOLLOWUP", "10"))  # seconds after a reply the asker can follow up
 ANSWER_WINDOW = 30.0  # after asking her record question aloud, a bare spoken reply ("it's 2") counts
+OTHERS_WINDOW = 6.0   # after she speaks, someone else's clear question goes to the model ("and the booster pump?")
 convs: dict[int, Conversation] = {}  # meeting -> turn-taking state (turns.py)
 _tasks: set[asyncio.Task] = set()
 
@@ -498,7 +500,7 @@ def on_speech(mid: int, speaker: str, text: str, addressed: bool, why: str = "")
     else:  # start, queue: a new question (a queued one waits for the answer being spoken: voice lock)
         q = {"parts": []}
     q["parts"].append(r.text)
-    delay = DEBOUNCE if has_content(" ".join(q["parts"])) else BARE_WAIT
+    delay = BARE_WAIT if question_pending(" ".join(q["parts"])) else DEBOUNCE
     q["task"] = _spawn(_reply(mid, speaker, q, delay=delay, key=speaker))
     c.pending[speaker] = q
 
@@ -542,7 +544,7 @@ def still_talking(mid: int, speaker: str):
     q = conv(mid).pending.get(speaker)
     if q and not q.get("generating"):
         q["task"].cancel()
-        delay = DEBOUNCE if has_content(" ".join(q["parts"])) else BARE_WAIT
+        delay = BARE_WAIT if question_pending(" ".join(q["parts"])) else DEBOUNCE
         q["task"] = _spawn(_reply(mid, speaker, q, delay=delay, key=speaker))
 
 
@@ -650,6 +652,7 @@ async def speak(mid: int, text: str, mp3: bytes | None = None, wait: bool = True
                 return
         # max(): a filler-overlapped answer must not shorten the window of audio still playing (barge-in check)
         speaking_until[mid] = max(speaking_until.get(mid, 0), time.monotonic()) + len(mp3) / 16000  # 16 KB/s
+        conv(mid).spoke_until = speaking_until[mid] + OTHERS_WINDOW
 
 
 async def _play_filler(mid: int, kind: str):
@@ -730,7 +733,7 @@ async def _answer(mid: int, speaker: str, q: dict, delay: float, via_chat: bool)
         # They may follow up without her name until FOLLOWUP s after she stops talking. After just her name
         # ("Amber?" -> "Yes?") their next line is the question, even without a question word.
         conv(mid).followups[speaker] = (max(speaking_until.get(mid, 0), time.monotonic()) + FOLLOWUP,
-                                        not has_content(question))
+                                        question_pending(question))
     latency = {"llm": round(t_llm - t0, 2), "tts": round(t_tts - t_llm, 2), "total": round(time.perf_counter() - t0, 2)}
     print(f"[amber] {speaker}: {question!r} -> {text!r} {latency}")
     publish("amber.reply", mid, {"to": speaker, "question": question, "text": text,
