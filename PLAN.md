@@ -276,3 +276,6 @@ voice is warmed at dispatch (first TTS call was 10–20 s cold). Sentence-split 
 Also from the final audit: scheduled joins (Recall `join_at`, cancel = delete bot), operator API closed to
 tunnel traffic, `fatal` bots still get closed out, empty meetings send no recap, record notes need the
 speaker's words to point at one record (model confidence alone can't auto-write), sloppy LLM JSON is cleaned.
+
+Known limit: reminder times use the backend machine's timezone (the operator's). Store a per-attendee timezone
+if attendees ever span timezones.

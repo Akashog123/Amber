@@ -319,7 +319,7 @@ def forget(mid: int):
     """Drop a finished meeting's live-call state (pending questions, playback clocks, screen frames)."""
     for key in [k for k in pending if k[0] == mid]:
         pending.pop(key)["task"].cancel()
-    for d in (filler_until, speaking_until, followup, since_extract, screens):
+    for d in (filler_until, speaking_until, followup, since_extract, screens, voice_locks):
         d.pop(mid, None)
 
 
@@ -454,6 +454,7 @@ SCREEN = re.compile(r"\b(screen|slides?|shared|sharing|showing|shown|chart|graph
                     r"table|deck|this (page|document|doc))\b|स्क्रीन|स्लाइड", re.I)
 SCREEN_FRESH = 120  # seconds a screen-share frame stays usable
 screens: dict[int, tuple[str, float]] = {}  # meeting -> (latest screen-share PNG, base64; monotonic time)
+voice_locks: dict[int, asyncio.Lock] = {}  # meeting -> serializes Amber's audio clips
 pending: dict[tuple[int, str], dict] = {}  # (meeting, speaker) -> {"parts": [...], "task": Task}
 filler_until: dict[int, float] = {}         # meeting -> monotonic time the current filler finishes
 speaking_until: dict[int, float] = {}       # meeting -> monotonic time Amber's audio ends
@@ -611,16 +612,19 @@ async def speak(mid: int, text: str, mp3: bytes | None = None, wait: bool = True
             publish("amber.error", mid, {"question": "", "error": f"tts: {e}"})
     if not mp3:
         return
-    if wait and (left := speaking_until.get(mid, 0) - time.monotonic()) > 0:
-        await asyncio.sleep(min(left, 20))  # another answer is still playing: don't talk over ourselves
-    if bot := _real_bot(mid):
-        try:
-            await recall.output_audio(bot, mp3)
-        except Exception as e:
-            print(f"[amber] output_audio failed: {e!r}")
-            publish("amber.error", mid, {"question": "", "error": f"audio: {e}"})
-            return
-    speaking_until[mid] = time.monotonic() + len(mp3) / 16000  # 128 kbps = 16 KB/s
+    # One clip at a time per meeting: two answers ready together would otherwise both check, then both play.
+    async with voice_locks.setdefault(mid, asyncio.Lock()):
+        if wait and (left := speaking_until.get(mid, 0) - time.monotonic()) > 0:
+            await asyncio.sleep(min(left, 20))  # another answer is still playing: don't talk over ourselves
+        if bot := _real_bot(mid):
+            try:
+                await recall.output_audio(bot, mp3)
+            except Exception as e:
+                print(f"[amber] output_audio failed: {e!r}")
+                publish("amber.error", mid, {"question": "", "error": f"audio: {e}"})
+                return
+        # max(): a filler-overlapped answer must not shorten the window of audio still playing (barge-in check)
+        speaking_until[mid] = max(speaking_until.get(mid, 0), time.monotonic()) + len(mp3) / 16000  # 16 KB/s
 
 
 async def _play_filler(mid: int, kind: str):
@@ -719,6 +723,8 @@ extracting: set[int] = set()
 def maybe_extract(mid: int):
     since_extract[mid] = since_extract.get(mid, 0) + 1
     if mid not in extracting and since_extract[mid] >= EXTRACT_EVERY:
+        extracting.add(mid)  # claim it now: a second webhook can arrive before the spawned task starts
+        since_extract[mid] = 0
         _spawn(run_extract(mid))
 
 
@@ -871,6 +877,8 @@ async def ask_which_record(mid: int, n: dict, cands: list[str], records: dict):
     # Raise-hand protocol: never interrupt people talking. The question goes to chat with a raised hand (and a
     # badge on the dashboard); Amber says it out loud only if someone invites her ("Amber, go ahead").
     question = "✋ " + question
+    if db.row("SELECT id FROM pending_confirmations WHERE meeting_id=? AND resolved=0 AND question=?", mid, question):
+        return  # same line seen by two extraction passes: ask once
     db.execute("INSERT INTO pending_confirmations (meeting_id,question,candidates_json,created_at) VALUES (?,?,?,?)",
                mid, question, json.dumps({"candidates": cands, "note": n}), db.now())
     publish("confirmation.asked", mid, {"question": question, "candidates": cands})
@@ -1029,6 +1037,8 @@ async def background_loop():
 @app.post("/api/meetings/{mid}/recap")
 async def resend_recap(mid: int):
     db.row("SELECT id FROM meetings WHERE id=?", mid) or _404()
+    if mid in recapping:
+        raise HTTPException(409, "The recap is still being written; try again in a moment.")
     await post_meeting(mid, force=True)
     return db.meeting_detail(mid)
 

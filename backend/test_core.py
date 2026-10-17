@@ -384,6 +384,33 @@ assert "1) PO-1041" in q_open and "2) PO-1046" in q_open, q_open
 c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "Akash", "neither")).raise_for_status()
 time.sleep(0.2)
 
+# Two webhooks landing back to back start one extraction pass, not two; the same line is asked about once.
+calls = []
+
+
+async def counting_extract(mid, after_id):
+    calls.append(mid)
+    await asyncio.sleep(0.05)
+    return {}, after_id
+
+
+async def burst():
+    main.since_extract[D] = main.EXTRACT_EVERY - 1
+    main.maybe_extract(D)
+    main.maybe_extract(D)
+    await asyncio.sleep(0.2)
+
+brain.extract = counting_extract
+asyncio.run(burst())
+brain.extract = no_extract
+assert calls == [D], calls
+n_q = db.row("SELECT COUNT(*) n FROM pending_confirmations WHERE meeting_id=?", D)["n"]
+asyncio.run(main.apply_extraction(D, {"record_notes": [pump_note]}))
+asyncio.run(main.apply_extraction(D, {"record_notes": [pump_note]}))
+assert db.row("SELECT COUNT(*) n FROM pending_confirmations WHERE meeting_id=?", D)["n"] == n_q + 1
+c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "Akash", "neither")).raise_for_status()
+time.sleep(0.2)
+
 # Hindi: questions get Hindi fillers, follow-ups in Hindi count, the fixed lines are said in Hindi.
 brain.answer = lambda *a, **k: asyncio.sleep(0, brain.FALLBACK)
 say(d["bot_id"], "Priya", "Amber, marketing ka budget kitna hai?")
