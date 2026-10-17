@@ -1,8 +1,10 @@
 """Amber Live backend. Run: uv run uvicorn main:app --reload --port 8000"""
 import asyncio
+import base64
 import json
 import os
 import re
+import sys
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -12,9 +14,12 @@ from uuid import uuid4
 from dotenv import load_dotenv
 
 load_dotenv()
+# Hindi / ✋ in log lines must never crash a reply on a Windows console (cp1252).
+for _stream in (sys.stdout, sys.stderr):
+    _stream.reconfigure(errors="backslashreplace")
 
-from fastapi import FastAPI, HTTPException, Request  # noqa: E402
-from fastapi.responses import StreamingResponse  # noqa: E402
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect  # noqa: E402
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 import db  # noqa: E402
@@ -36,8 +41,20 @@ app = FastAPI(title="Amber Live", lifespan=lifespan)
 seed.seed()  # creates tables + mock records; idempotent
 WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN", "")
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
-# ASR often mishears the name; chat may also start with "@Amber".
-WAKE = re.compile(r"\b(amber|ember|amba|ambar|umber)\b", re.I)
+# ASR often mishears the name; chat may also start with "@Amber". Hindi transcripts may spell it in Devanagari.
+WAKE = re.compile(r"\b(amber|ember|amba|ambar|umber)\b|अंबर|अम्बर|एम्बर|ऐम्बर", re.I)
+HINDI = re.compile(r"[ऀ-ॿ]|\b(kya|kaun|kab|kahan|kitna|kitne|batao|bataiye|hai|hain|karo|kijiye)\b", re.I)
+# The public tunnel exists for Recall's webhooks only; the operator API stays local (the dashboard proxies to it).
+PUBLIC_PATHS = ("/webhooks/", "/ws/")
+
+
+@app.middleware("http")
+async def local_only(request: Request, call_next):
+    # cloudflared/ngrok forward from localhost, so the client IP alone can't tell; their forwarding headers can.
+    forwarded = any(h in request.headers for h in ("cf-connecting-ip", "x-forwarded-for", "ngrok-trace-id"))
+    if forwarded and not request.url.path.startswith(PUBLIC_PATHS):
+        return JSONResponse({"detail": "The operator API is only available locally."}, status_code=403)
+    return await call_next(request)
 PLATFORMS = {"meet.google.com": "google_meet", "zoom.us": "zoom", "teams.microsoft.com": "microsoft_teams",
              "teams.live.com": "microsoft_teams"}
 
@@ -90,8 +107,14 @@ def keyterms(mid: int) -> list[str]:
     return list(dict.fromkeys(t.strip() for t in terms if t and t.strip()))
 
 
+def normalize_url(url: str) -> str:
+    """People paste "meet.google.com/abc-defg-hij" without the scheme."""
+    url = url.strip()
+    return url if "://" in url else f"https://{url}"
+
+
 def detect_platform(url: str) -> str | None:
-    p = urlparse(url)
+    p = urlparse(normalize_url(url))
     if p.scheme != "https":
         return None
     host = p.hostname or ""
@@ -114,13 +137,41 @@ class Dispatch(BaseModel):
     replay: bool = False  # skip Recall; events come from replay.py
     document_name: str = ""
     document_b64: str = ""  # PDF / DOCX / TXT, base64; its text becomes part of Amber's context
+    join_at: str | None = None  # ISO time for a scheduled meeting; Recall sends Amber in then (empty = now)
+
+
+EMAIL = re.compile(r"^[^@\s,<>]+@[^@\s,<>]+\.[a-z]{2,}$", re.I)
+SCREEN_VISION = os.getenv("AMBER_SCREEN_VISION", "") == "1"
+
+
+def _join_at(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        when = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, "join_at must be an ISO date-time.")
+    when = when if when.tzinfo else when.astimezone()  # naive = the operator's local time
+    now = datetime.now(timezone.utc)
+    if when < now - timedelta(minutes=5):
+        raise HTTPException(400, "That meeting time is in the past.")
+    # Recall needs ~10 minutes of lead time to schedule; anything sooner just joins now.
+    return when.astimezone(timezone.utc).isoformat() if when > now + timedelta(minutes=10) else None
 
 
 @app.post("/api/meetings/dispatch")
 async def dispatch(body: Dispatch):
+    body.url = normalize_url(body.url)
     platform = detect_platform(body.url)
     if not platform:
         raise HTTPException(400, "Unsupported meeting URL (Google Meet, Zoom or Teams https link).")
+    bad = [a.email for a in body.attendees if a.email.strip() and not EMAIL.match(a.email.strip())]
+    if bad:
+        raise HTTPException(400, f"Invalid attendee email: {', '.join(bad)}")
+    body.attendees = [Attendee(name=a.name.strip() or a.email.split("@")[0], email=a.email.strip())
+                      for a in body.attendees if a.name.strip() or a.email.strip()]
+    body.title = body.title.strip() or "Meeting"
+    join_at = _join_at(body.join_at)
     context = body.context
     if body.document_b64:
         try:
@@ -129,46 +180,88 @@ async def dispatch(body: Dispatch):
         except Exception as e:
             raise HTTPException(400, f"Could not read the document: {e}")
     mid = db.execute(
-        "INSERT INTO meetings (series_id,title,url,platform,agenda,context_text,status,created_at) "
-        "VALUES (?,?,?,?,?,?,?,?)",
-        body.series_id, body.title, body.url, platform, body.agenda, context.strip(), "queued", db.now())
+        "INSERT INTO meetings (series_id,title,url,platform,agenda,context_text,status,created_at,join_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        body.series_id, body.title, body.url, platform, body.agenda, context.strip(), "queued", db.now(), join_at)
     with db.db() as c:
         c.executemany("INSERT INTO attendees VALUES (?,?,?)", [(mid, a.name, a.email) for a in body.attendees])
     if recall.enabled() and not body.replay:
-        hook = f"{os.environ['PUBLIC_URL'].rstrip('/')}/webhooks/recall?token={WEBHOOK_TOKEN}"
+        if not os.getenv("PUBLIC_URL", "").startswith("https://"):
+            db.execute("UPDATE meetings SET status='failed' WHERE id=?", mid)
+            raise HTTPException(500, "PUBLIC_URL (the https tunnel to this backend) is not set in backend/.env.")
+        base = os.environ["PUBLIC_URL"].rstrip("/")
+        hook = f"{base}/webhooks/recall?token={WEBHOOK_TOKEN}"
+        ws = f"{base.replace('https://', 'wss://', 1)}/ws/recall?token={WEBHOOK_TOKEN}" if SCREEN_VISION else None
         try:
-            bot_id = await recall.create_bot(body.url, hook, keyterms(mid))
+            bot_id = await recall.create_bot(body.url, hook, keyterms(mid), ws, join_at)
         except Exception as e:
             db.execute("UPDATE meetings SET status='failed' WHERE id=?", mid)
-            raise HTTPException(502, f"Recall bot creation failed: {e}")
-        status = "joining"
+            detail = getattr(getattr(e, "response", None), "text", "") or str(e)
+            raise HTTPException(502, f"Recall bot creation failed: {detail[:300]}")
+        status = "scheduled" if join_at else "joining"
     else:
         bot_id, status = f"replay-{uuid4().hex[:8]}", "replay"  # no key: drive it with replay.py
     db.execute("UPDATE meetings SET bot_id=?, status=? WHERE id=?", bot_id, status, mid)
     publish("meeting.status", mid, {"status": status})
-    if os.getenv("ELEVENLABS_API_KEY"):
+    if os.getenv("ELEVENLABS_API_KEY") and not join_at:
         _spawn(voice.warm_fillers())  # synthesize + cache fillers before anyone asks anything
     return {"id": mid, "bot_id": bot_id, "status": status}
 
 
 @app.get("/api/meetings")
 async def list_meetings():
-    return db.rows("SELECT id,series_id,title,url,platform,status,started_at,ended_at,created_at "
-                   "FROM meetings ORDER BY id DESC")
+    return db.rows("SELECT id,series_id,title,url,platform,status,started_at,ended_at,created_at,join_at,"
+                   "recording_paused FROM meetings ORDER BY id DESC")
 
 
 @app.get("/api/meetings/{mid}")
 async def get_meeting(mid: int):
-    return db.meeting_detail(mid) or _404()
+    m = db.meeting_detail(mid) or _404()
+    if _real_bot(mid) and m["status"] in TERMINAL - {"cancelled", "failed"}:
+        m["recording_url"] = f"/api/meetings/{mid}/recording"  # resolved to a fresh Recall link when played
+    return m
 
 
 @app.post("/api/meetings/{mid}/stop")
 async def stop(mid: int):
-    m = db.row("SELECT bot_id FROM meetings WHERE id=?", mid) or _404()
-    if recall.enabled() and m["bot_id"] and not m["bot_id"].startswith("replay-"):
-        await recall.leave(m["bot_id"])
+    m = db.row("SELECT bot_id, status FROM meetings WHERE id=?", mid) or _404()
+    if m["status"] in TERMINAL:
+        return {"ok": True}  # already over; don't rerun the post-meeting pipeline
+    bot = _real_bot(mid)
+    if m["status"] == "scheduled":  # hasn't joined yet: cancel instead of producing an empty recap
+        if bot:
+            try:
+                await recall.delete_bot(bot)
+            except Exception as e:
+                print(f"[stop] cancel bot {bot}: {e!r}")
+        _set_plain_status(mid, "cancelled")
+        return {"ok": True}
+    if bot:
+        try:
+            await recall.leave(bot)
+        except Exception as e:  # already left / kicked: still close the meeting out on our side
+            print(f"[stop] leave bot {bot}: {e!r}")
     _set_status(mid, "ended")
     return {"ok": True}
+
+
+@app.get("/api/meetings/{mid}/recording")
+async def recording(mid: int):
+    """Recall's download links are pre-signed and expire, so fetch a fresh one each time the video is opened."""
+    db.row("SELECT id FROM meetings WHERE id=?", mid) or _404()
+    bot = _real_bot(mid)
+    url = await recall.recording_url(bot) if bot else None
+    if not url:
+        raise HTTPException(404, "No recording yet (Recall takes a minute or two after the call ends).")
+    return RedirectResponse(url)
+
+
+@app.post("/api/meetings/{mid}/recording/{action}")
+async def recording_control(mid: int, action: str):
+    if action not in ("pause", "resume"):
+        _404()
+    db.row("SELECT id FROM meetings WHERE id=?", mid) or _404()
+    return {"paused": await set_recording(mid, action == "pause")}
 
 
 @app.get("/api/records")
@@ -188,7 +281,10 @@ async def events():
     async def stream():
         try:
             while True:
-                yield f"data: {json.dumps(await q.get())}\n\n"
+                try:
+                    yield f"data: {json.dumps(await asyncio.wait_for(q.get(), 15))}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"  # keeps proxies from closing an idle stream
         finally:
             subscribers.discard(q)
 
@@ -199,13 +295,32 @@ def _404():
     raise HTTPException(404, "Not found")
 
 
+CALL_OVER = {"done", "ended", "call_ended", "fatal"}  # fatal = kicked / never admitted: still close it out
+TERMINAL = CALL_OVER | {"processing", "completed", "cancelled", "failed", "recording_done", "analysis_done"}
+
+
 def _set_status(mid: int, status: str):
-    col = {"in_call_recording": "started_at", "ended": "ended_at", "done": "ended_at"}.get(status)
+    prev = (db.row("SELECT status FROM meetings WHERE id=?", mid) or {}).get("status")
+    if prev in ("processing", "completed", "cancelled") and status in TERMINAL:
+        return  # late bot.done / recording_done after the recap: keep "completed"
+    col = {"in_call_recording": "started_at", "ended": "ended_at", "done": "ended_at", "call_ended": "ended_at",
+           "fatal": "ended_at"}.get(status)
     db.execute(f"UPDATE meetings SET status=?{f', {col}=COALESCE({col}, ?)' if col else ''} WHERE id=?",
                *([status, db.now(), mid] if col else [status, mid]))
     publish("meeting.status", mid, {"status": status})
-    if status in ("done", "ended", "call_ended"):
+    if status == "joining_call" and prev == "scheduled" and os.getenv("ELEVENLABS_API_KEY"):
+        _spawn(voice.warm_fillers())  # scheduled bot is on its way in
+    if status in CALL_OVER and prev not in CALL_OVER:
         _spawn(final_extract(mid))
+        forget(mid)
+
+
+def forget(mid: int):
+    """Drop a finished meeting's live-call state (pending questions, playback clocks, screen frames)."""
+    for key in [k for k in pending if k[0] == mid]:
+        pending.pop(key)["task"].cancel()
+    for d in (filler_until, speaking_until, followup, since_extract, screens):
+        d.pop(mid, None)
 
 
 # --- Recall webhooks ---------------------------------------------------------
@@ -229,6 +344,40 @@ async def recall_webhook(request: Request):
     return {"ok": True}
 
 
+@app.websocket("/ws/recall")
+async def recall_ws(ws: WebSocket):
+    """Screen-share frames (AMBER_SCREEN_VISION=1). Recall streams 2 fps PNGs of every video; only the latest
+    screen share per meeting is kept, and it's only looked at when someone asks Amber about the screen."""
+    if WEBHOOK_TOKEN and ws.query_params.get("token") != WEBHOOK_TOKEN:
+        await ws.close(code=1008)
+        return
+    await ws.accept()
+    meeting_of: dict[str, int | None] = {}
+    try:
+        while True:
+            msg = await ws.receive()
+            if msg["type"] == "websocket.disconnect":
+                break
+            try:
+                payload = json.loads(msg.get("text") or (msg.get("bytes") or b"{}").decode())
+            except ValueError:
+                continue
+            data = payload.get("data") or {}
+            inner = data.get("data") or {}
+            if payload.get("event") != "video_separate_png.data" or inner.get("type") != "screenshare":
+                continue
+            bot_id = (data.get("bot") or {}).get("id")
+            if bot_id not in meeting_of:
+                meeting_of[bot_id] = (db.row("SELECT id FROM meetings WHERE bot_id=?", bot_id) or {}).get("id")
+            if (mid := meeting_of[bot_id]) and inner.get("buffer"):
+                if mid not in screens or time.monotonic() - screens[mid][1] > SCREEN_FRESH:
+                    who = (inner.get("participant") or {}).get("name") or "Someone"
+                    publish("screen.shared", mid, {"by": who})
+                screens[mid] = (inner["buffer"], time.monotonic())
+    except WebSocketDisconnect:
+        pass
+
+
 def handle_event(mid: int, event: str, data: dict):
     inner = data.get("data") or {}
     who = (inner.get("participant") or {}).get("name") or "Unknown"
@@ -237,7 +386,10 @@ def handle_event(mid: int, event: str, data: dict):
         return  # our own voice / chat echoed back
 
     if event == "transcript.partial_data":
-        yield_floor(mid)
+        # A real interruption, not a cough or "mm": two words, or one long one ("Wait", "Stop" count too).
+        partial = " ".join(w.get("text", "") for w in inner.get("words") or []).split()
+        if len(partial) >= 2 or (partial and (len(partial[0]) >= 4 or STOP_WORDS.match(partial[0]))):
+            yield_floor(mid)
         still_talking(mid, who)
     elif event == "transcript.data":
         words = inner.get("words") or []
@@ -251,7 +403,9 @@ def handle_event(mid: int, event: str, data: dict):
         publish("transcript", mid, {"speaker": who, "text": text, "ts": start, "addressed": addressed})
         yield_floor(mid)
         # "Amber, the first one" / "PO-1046" may answer her confirmation question instead of asking a new one.
-        if not ((addressed or RECORD_ID.search(text)) and resolve_confirmation(mid, who, text)):
+        if addressed and command(mid, who, text):
+            pass
+        elif not ((addressed or RECORD_ID.search(text)) and resolve_confirmation(mid, who, text)):
             on_speech(mid, who, text, addressed)
         maybe_extract(mid)
     elif event == "participant_events.join":
@@ -265,6 +419,8 @@ def handle_event(mid: int, event: str, data: dict):
         text = (inner.get("data") or {}).get("text", "")
         db.execute("INSERT INTO chat (meeting_id,sender,text,ts,is_amber) VALUES (?,?,?,?,0)", mid, who, text, ts)
         publish("chat", mid, {"sender": who, "text": text, "at": ts, "addressed": is_addressed(text)})
+        if is_addressed(text) and command(mid, who, text, via_chat=True):
+            return
         if resolve_confirmation(mid, who, text):
             return
         if is_addressed(text) and not CANCEL.search(text):
@@ -289,6 +445,15 @@ LOOKUP = re.compile(r"\b(status|orders?|ordered|owns?|owner|who|when|where|recor
                     re.I)
 CORRECTION = re.compile(r"\b(actually|i mean|sorry|instead|rather|wait)\b", re.I)
 CANCEL = re.compile(r"\b(never ?mind|forget it|cancel that|scratch that|no worries)\b", re.I)
+STOP_WORDS = re.compile(r"^(no|stop|wait|hey|sorry|but)\W*$", re.I)
+RECORD_CMD = re.compile(r"\b(stop|pause|halt|start|resume|restart|continue|unpause)\b\W+(?:\w+\W+){0,2}?"
+                        r"(recording|record)\b", re.I)
+GO_AHEAD = re.compile(r"\b(go ahead|what is it|what's that|you had a question|your question|raised your hand|"
+                      r"speak up|you wanted to say)\b", re.I)
+SCREEN = re.compile(r"\b(screen|slides?|shared|sharing|showing|shown|chart|graph|diagram|spreadsheet|sheet|"
+                    r"table|deck|this (page|document|doc))\b|स्क्रीन|स्लाइड", re.I)
+SCREEN_FRESH = 120  # seconds a screen-share frame stays usable
+screens: dict[int, tuple[str, float]] = {}  # meeting -> (latest screen-share PNG, base64; monotonic time)
 pending: dict[tuple[int, str], dict] = {}  # (meeting, speaker) -> {"parts": [...], "task": Task}
 filler_until: dict[int, float] = {}         # meeting -> monotonic time the current filler finishes
 speaking_until: dict[int, float] = {}       # meeting -> monotonic time Amber's audio ends
@@ -307,6 +472,8 @@ def _spawn(coro) -> asyncio.Task:
 def on_speech(mid: int, speaker: str, text: str, addressed: bool):
     key = (mid, speaker)
     q = pending.get(key)
+    if q and q.get("committed"):
+        q = None  # that answer is already being spoken; anything new is a new question
     if CANCEL.search(text):
         if q:
             q["task"].cancel()
@@ -314,7 +481,8 @@ def on_speech(mid: int, speaker: str, text: str, addressed: bool):
             publish("amber.cancelled", mid, {"speaker": speaker})
         return
     who, until = followup.get(mid, ("", 0))
-    if not addressed and who == speaker and time.monotonic() < until and QUESTION.search(text):
+    if (not addressed and who == speaker and time.monotonic() < until and (QUESTION.search(text) or HINDI.search(text))
+            and not names_someone_else(mid, speaker, text)):
         addressed = True  # follow-up to Amber's last answer; no need to say her name again
     if not (addressed or q):
         return
@@ -327,6 +495,15 @@ def on_speech(mid: int, speaker: str, text: str, addressed: bool):
     delay = DEBOUNCE if has_content(" ".join(q["parts"])) else BARE_WAIT
     q["task"] = _spawn(_reply(mid, speaker, q, delay=delay, key=key))
     pending[key] = q
+
+
+def names_someone_else(mid: int, speaker: str, text: str) -> bool:
+    """ "Priya, please close the PPE order" is for Priya, even right after the speaker asked Amber something."""
+    people = db.rows("SELECT name FROM participants WHERE meeting_id=? UNION SELECT name FROM attendees WHERE meeting_id=?",
+                     mid, mid)
+    me = speaker.split(" ")[0].lower()
+    firsts = {p["name"].split(" ")[0].lower() for p in people if p["name"]} - {me, "amber", "unknown", ""}
+    return bool(firsts & set(re.findall(r"[a-z]+", text.lower())))
 
 
 def still_talking(mid: int, speaker: str):
@@ -349,7 +526,101 @@ def filler_kind(question: str) -> str | None:
     """Which filler pool fits, or None for greetings / questions about Amber herself."""
     if not has_content(question) or NO_FILLER.search(question):
         return None
-    return "lookup" if LOOKUP.search(question) else "think"
+    kind = "lookup" if LOOKUP.search(question) else "think"
+    return kind + "_hi" if HINDI.search(question) else kind
+
+
+def screen_for(mid: int, question: str) -> bytes | None:
+    """The current screen share, only when the question is about it (images make the answer slower)."""
+    frame = screens.get(mid)
+    if frame and SCREEN.search(question) and time.monotonic() - frame[1] < SCREEN_FRESH:
+        return base64.b64decode(frame[0])
+    return None
+
+
+def command(mid: int, who: str, text: str, via_chat: bool = False) -> bool:
+    """Things Amber does rather than answers. True if `text` was one."""
+    if m := RECORD_CMD.search(text):
+        _spawn(record_command(mid, m.group(1).lower() in ("stop", "pause", "halt"), via_chat))
+        return True
+    if GO_AHEAD.search(text) and (pc := open_confirmation(mid)):
+        # Permission given: ask out loud (short spoken form; the chat keeps the full question).
+        _spawn(say(mid, pc["question"].removeprefix("✋ ") if via_chat else spoken_question(pc), via_chat))
+        return True
+    return False
+
+
+def spoken_question(pc: dict) -> str:
+    cands = json.loads(pc["candidates_json"])["candidates"]
+    names = {r["id"]: r["name"] for r in db.rows("SELECT id, name FROM records")}
+    if len(cands) == 1:
+        return f"Quick check: should I note that on {cands[0]}, the {names.get(cands[0], '')}? Say Amber, yes or no."
+    options = ", or ".join(f"{i + 1}, {c}, the {names.get(c, '')}" for i, c in enumerate(cands))
+    return (f"Thanks. Someone mentioned a record update and I'm not sure which record: did you mean {options}? "
+            "Say Amber and the number, or type it in the chat.")
+
+
+async def set_recording(mid: int, pause: bool) -> bool:
+    if bot := _real_bot(mid):
+        try:
+            await (recall.pause_recording if pause else recall.resume_recording)(bot)
+        except Exception as e:
+            raise HTTPException(502, f"Recall could not {'pause' if pause else 'resume'} the recording: {e}")
+    db.execute("UPDATE meetings SET recording_paused=? WHERE id=?", int(pause), mid)
+    publish("recording.paused" if pause else "recording.resumed", mid, {})
+    return pause
+
+
+async def record_command(mid: int, pause: bool, via_chat: bool):
+    paused = bool((db.row("SELECT recording_paused FROM meetings WHERE id=?", mid) or {}).get("recording_paused"))
+    if pause == paused:
+        msg = "Recording is already paused." if pause else "I'm already recording."
+    else:
+        try:
+            await set_recording(mid, pause)
+            # While paused Recall sends no transcript, so Amber can't hear "resume": point people at the chat.
+            msg = ("Okay, recording paused. I can't hear the call while it's paused, so type "
+                   "'Amber, resume recording' in the chat when you want me back." if pause else
+                   "Recording resumed, I'm listening again.")
+        except HTTPException as e:
+            print(f"[amber] {e.detail}")
+            msg = "Sorry, I couldn't change the recording just now."
+    await say(mid, msg, via_chat)
+    if pause and not via_chat and msg.startswith("Okay"):
+        await amber_chat(mid, "Recording paused. Type 'Amber, resume recording' here to resume.")
+
+
+async def say(mid: int, text: str, via_chat: bool = False):
+    if via_chat:
+        await amber_chat(mid, text)
+    else:
+        await speak(mid, text)
+        publish("amber.reply", mid, {"to": "", "question": "", "text": text, "via": "voice", "latency": {}})
+
+
+async def speak(mid: int, text: str, mp3: bytes | None = None, wait: bool = True):
+    """Say `text` in the call and log it as Amber's line. Never raises: a voice failure must not kill the reply.
+    wait=False: the caller already timed this (an answer starts slightly before its own filler ends)."""
+    db.execute("INSERT INTO utterances (meeting_id,speaker,text,ts,addressed) VALUES (?,?,?,?,0)",
+               mid, "Amber", text, None)
+    if mp3 is None and os.getenv("ELEVENLABS_API_KEY"):
+        try:
+            mp3 = await voice.tts(text)
+        except Exception as e:
+            print(f"[amber] tts failed: {e!r}")
+            publish("amber.error", mid, {"question": "", "error": f"tts: {e}"})
+    if not mp3:
+        return
+    if wait and (left := speaking_until.get(mid, 0) - time.monotonic()) > 0:
+        await asyncio.sleep(min(left, 20))  # another answer is still playing: don't talk over ourselves
+    if bot := _real_bot(mid):
+        try:
+            await recall.output_audio(bot, mp3)
+        except Exception as e:
+            print(f"[amber] output_audio failed: {e!r}")
+            publish("amber.error", mid, {"question": "", "error": f"audio: {e}"})
+            return
+    speaking_until[mid] = time.monotonic() + len(mp3) / 16000  # 128 kbps = 16 KB/s
 
 
 async def _play_filler(mid: int, kind: str):
@@ -381,6 +652,16 @@ def yield_floor(mid: int):
 
 
 async def _reply(mid: int, speaker: str, q: dict, delay: float, via_chat=False, key=None):
+    try:
+        await _answer(mid, speaker, q, delay, via_chat)
+    finally:
+        # Done or crashed: drop the pending question so its words don't leak into this speaker's next one.
+        # (A restart replaced q["task"] with a newer task, which then owns the entry.)
+        if key and pending.get(key) is q and q.get("task") is asyncio.current_task():
+            pending.pop(key)
+
+
+async def _answer(mid: int, speaker: str, q: dict, delay: float, via_chat: bool):
     await asyncio.sleep(delay)
     q["generating"] = True
     question = " ".join(q["parts"])
@@ -388,11 +669,13 @@ async def _reply(mid: int, speaker: str, q: dict, delay: float, via_chat=False, 
     if not via_chat and not q.get("filler") and (kind := filler_kind(question)):
         q["filler"] = _spawn(_play_filler(mid, kind))  # instant acknowledgement while we think
     try:
-        text = await brain.answer(mid, speaker, question)
+        text = await brain.answer(mid, speaker, question, screen_for(mid, question))
     except Exception as e:  # every model failed: say so instead of going silent
         print(f"[amber] reply failed: {e!r}")
         publish("amber.error", mid, {"question": question, "error": str(e)})
         text = brain.SORRY
+    if HINDI.search(question) and text in (brain.FALLBACK, brain.SORRY):  # models keep the fixed lines in English
+        text = brain.FALLBACK_HI if text == brain.FALLBACK else brain.SORRY_HI
     t_llm = time.perf_counter()
     try:
         mp3 = None if via_chat or not os.getenv("ELEVENLABS_API_KEY") else await voice.tts(text)
@@ -401,23 +684,14 @@ async def _reply(mid: int, speaker: str, q: dict, delay: float, via_chat=False, 
         publish("amber.error", mid, {"question": question, "error": f"tts: {e}"})
         mp3 = None
     t_tts = time.perf_counter()
-    if key and pending.get(key) is q:
-        pending.pop(key)  # committed: later speech no longer rewrites this answer
-    bot = _real_bot(mid)
+    q["committed"] = True  # later speech no longer rewrites this answer
     if via_chat:
-        db.execute("INSERT INTO chat (meeting_id,sender,text,ts,is_amber) VALUES (?,?,?,?,1)", mid, "Amber", text, db.now())
-        if bot:
-            await recall.send_chat(bot, text)
+        await amber_chat(mid, text)
     else:
-        db.execute("INSERT INTO utterances (meeting_id,speaker,text,ts,addressed) VALUES (?,?,?,?,0)",
-                   mid, "Amber", text, None)
         if q.get("filler"):
             await q["filler"]  # never talk over our own "let me check"
             await asyncio.sleep(max(0, filler_until.get(mid, 0) - FILLER_OVERLAP - time.monotonic()))
-        if bot and mp3:
-            await recall.output_audio(bot, mp3)
-        if mp3:
-            speaking_until[mid] = time.monotonic() + len(mp3) / 16000  # 128 kbps = 16 KB/s
+        await speak(mid, text, mp3 or b"", wait=not q.get("filler"))
         followup[mid] = (speaker, max(speaking_until.get(mid, 0), time.monotonic()) + FOLLOWUP)
     latency = {"llm": round(t_llm - t0, 2), "tts": round(t_tts - t_llm, 2), "total": round(time.perf_counter() - t0, 2)}
     print(f"[amber] {speaker}: {question!r} -> {text!r} {latency}")
@@ -471,36 +745,94 @@ async def final_extract(mid: int):
 
 
 def _attendee_email(mid: int, name: str | None) -> str:
-    first = (name or "").split(" ")[0].lower()
-    for a in db.rows("SELECT name, email FROM attendees WHERE meeting_id=?", mid):
-        if a["name"].split(" ")[0].lower() == first:
-            return a["email"] or ""
-    return ""
+    """Full-name match first, then a unique first-name match ("Rahul" -> Rahul Mehta); ambiguous -> no email."""
+    name = (name or "").strip().lower()
+    people = db.rows("SELECT name, email FROM attendees WHERE meeting_id=? AND COALESCE(email,'')!=''", mid)
+    exact = [a["email"] for a in people if a["name"].strip().lower() == name]
+    first = [a["email"] for a in people if name and a["name"].split(" ")[0].lower() == name.split(" ")[0]]
+    return (exact or (first if len(set(first)) == 1 else [""]))[0]
+
+
+TASK_STATES = {"open", "in_progress", "done", "blocked"}
+_GENERIC = {"the", "and", "for", "two", "with", "from", "this", "that"}
+
+
+def _terms(text: str) -> set[str]:
+    return {w[:-1] if len(w) > 3 and w.endswith("s") else w  # "pumps" ~ "pump"
+            for w in re.findall(r"[a-z0-9#-]+", (text or "").lower()) if len(w) >= 3 and w not in _GENERIC}
+
+
+def _phrase(text: str) -> str:
+    return " " + " ".join(re.findall(r"[a-z0-9#-]+", (text or "").lower())) + " "  # padded: whole-word matches
+
+
+def which_records(quote: str, records: dict) -> list[str]:
+    """Records the speaker's own words point to (best name/alias overlap). More than one = the words alone are
+    ambiguous, whatever confidence the model claims: "the Grundfos pump" fits both Grundfos pump orders."""
+    if ids := {f"{a.upper()}-{b}" for a, b in RECORD_ID.findall(quote or "")} & records.keys():
+        return sorted(ids)
+    words, said = _terms(quote), _phrase(quote)
+    # A whole name/alias ("chiller two", "pump seals") outweighs single shared words ("chiller", "pump").
+    scores = {rid: len(words & _terms(f"{r['name']} {r['aliases']}"))
+              + 2 * sum(_phrase(p) in said for p in [r["name"], *(r["aliases"] or "").split(",")] if p.strip())
+              for rid, r in records.items()}
+    best = max(scores.values(), default=0)
+    return [rid for rid, s in scores.items() if s == best] if best else []
+
+
+def _clean(v):
+    """Models write "null" / "none" / "" for missing values."""
+    return None if v is None or str(v).strip().lower() in ("", "null", "none", "n/a", "unknown") else str(v).strip()
+
+
+def _date(v) -> str | None:
+    v = _clean(v)
+    return v[:10] if v and re.match(r"^\d{4}-\d{2}-\d{2}", v) else None
 
 
 async def apply_extraction(mid: int, r: dict):
+    if not isinstance(r, dict):
+        return
     series = (db.row("SELECT series_id FROM meetings WHERE id=?", mid) or {}).get("series_id")
     open_keys = {f"{(t['owner'] or '').lower()}|{t['title'].lower()}" for t in db.rows(
         "SELECT owner, title FROM tasks WHERE status!='done' AND (series_id=? OR meeting_id=?)", series, mid)}
     for t in r.get("tasks") or []:
-        key = f"{(t.get('owner') or '').lower()}|{(t.get('title') or '').lower()}"
-        if not t.get("title") or key in open_keys:
+        if not isinstance(t, dict) or not _clean(t.get("title")):
+            continue
+        title, owner = _clean(t["title"]), _clean(t.get("owner"))
+        key = f"{(owner or '').lower()}|{title.lower()}"
+        if key in open_keys:
             continue
         open_keys.add(key)  # also dedupes repeats within this same pass
         tid = db.execute("INSERT INTO tasks (meeting_id,series_id,title,owner,owner_email,due_at,status,quote) "
-                         "VALUES (?,?,?,?,?,?,'open',?)", mid, series, t["title"], t.get("owner"),
-                         _attendee_email(mid, t.get("owner")), t.get("due"), t.get("quote"))
-        publish("task.created", mid, {"id": tid, **t})
+                         "VALUES (?,?,?,?,?,?,'open',?)", mid, series, title, owner,
+                         _attendee_email(mid, owner), _date(t.get("due")), _clean(t.get("quote")))
+        publish("task.created", mid, {"id": tid, "title": title, "owner": owner, "due": _date(t.get("due"))})
     for u in r.get("task_updates") or []:
-        if db.row("SELECT id FROM tasks WHERE id=?", u.get("task_id")):
-            db.execute("UPDATE tasks SET status=COALESCE(?, status), last_update=? WHERE id=?",
-                       u.get("status"), u.get("note") or u.get("quote"), u["task_id"])
-            publish("task.updated", mid, u)
-    records = {x["id"]: x for x in db.rows("SELECT id, name FROM records")}
+        if not isinstance(u, dict):
+            continue
+        status = _clean(u.get("status"))
+        status = status.lower() if status and status.lower() in TASK_STATES else None
+        if task := db.row("SELECT id FROM tasks WHERE id=?", u.get("task_id")):
+            db.execute("UPDATE tasks SET status=COALESCE(?, status), last_update=COALESCE(?, last_update) WHERE id=?",
+                       status, _clean(u.get("note")) or _clean(u.get("quote")), task["id"])
+            publish("task.updated", mid, {**u, "status": status})
+    records = {x["id"]: x for x in db.rows("SELECT id, name, aliases FROM records")}
     for n in r.get("record_notes") or []:
-        conf = float(n.get("confidence") or 0)
-        rid = n.get("record_id")
-        cands = [c for c in dict.fromkeys([rid, *(n.get("candidates") or [])]) if c in records]
+        if not isinstance(n, dict) or not _clean(n.get("note")):
+            continue
+        try:
+            conf = float(n.get("confidence") or 0)
+        except (TypeError, ValueError):
+            conf = 0.0
+        n["new_status"] = _clean(n.get("new_status"))
+        rid = str(n.get("record_id") or "").strip().upper()
+        alts = n.get("candidates") if isinstance(n.get("candidates"), list) else []
+        cands = [c for c in dict.fromkeys([rid, *(str(a).strip().upper() for a in alts)]) if c in records]
+        spoken = which_records(n.get("quote") or "", records)
+        if len(spoken) > 1 and (set(spoken) & set(cands) or not cands):
+            cands = ([c for c in cands if c in spoken] + [s for s in spoken if s not in cands])[:3]
+            conf = min(max(conf, CONFIRM_MIN), AUTO_WRITE - 0.01)  # the words are ambiguous: ask, don't write
         if conf >= AUTO_WRITE and rid in records and len(cands) == 1:
             write_note(mid, rid, n, conf)
         elif conf >= CONFIRM_MIN and cands:
@@ -536,15 +868,28 @@ async def ask_which_record(mid: int, n: dict, cands: list[str], records: dict):
     else:
         question = (f'Quick check: should I note "{n.get("note")}" on {cands[0]} {records[cands[0]]["name"]}? '
                     "Reply yes or no.")
+    # Raise-hand protocol: never interrupt people talking. The question goes to chat with a raised hand (and a
+    # badge on the dashboard); Amber says it out loud only if someone invites her ("Amber, go ahead").
+    question = "✋ " + question
     db.execute("INSERT INTO pending_confirmations (meeting_id,question,candidates_json,created_at) VALUES (?,?,?,?)",
                mid, question, json.dumps({"candidates": cands, "note": n}), db.now())
     publish("confirmation.asked", mid, {"question": question, "candidates": cands})
+    publish("amber.hand_raised", mid, {"question": question})
     await amber_chat(mid, question)
+
+
+CONFIRM_TTL_MIN = 15  # an old unanswered question shouldn't capture "the second one" said much later
+
+
+def open_confirmation(mid: int) -> dict | None:
+    since = (datetime.now(timezone.utc) - timedelta(minutes=CONFIRM_TTL_MIN)).isoformat(timespec="seconds")
+    return db.row("SELECT * FROM pending_confirmations WHERE meeting_id=? AND resolved=0 AND created_at>=? "
+                  "ORDER BY id DESC LIMIT 1", mid, since)
 
 
 def resolve_confirmation(mid: int, who: str, text: str) -> bool:
     """Handle a reply to Amber's latest open question. True if `text` was that reply."""
-    pc = db.row("SELECT * FROM pending_confirmations WHERE meeting_id=? AND resolved=0 ORDER BY id DESC LIMIT 1", mid)
+    pc = open_confirmation(mid)
     if not pc:
         return False
     data = json.loads(pc["candidates_json"])
@@ -569,6 +914,10 @@ def resolve_confirmation(mid: int, who: str, text: str) -> bool:
     else:
         _spawn(amber_chat(mid, "Okay, I won't update any record for that."))
     publish("confirmation.resolved", mid, {"chosen": chosen, "by": who})
+    if nxt := open_confirmation(mid):  # an earlier question is still waiting: ask it again so replies line up
+        _spawn(amber_chat(mid, nxt["question"]))
+    else:
+        publish("amber.hand_lowered", mid, {})
     return True
 
 
@@ -576,7 +925,8 @@ def resolve_confirmation(mid: int, who: str, text: str) -> bool:
 REMINDER_LEAD_H = float(os.getenv("AMBER_REMINDER_LEAD_HOURS", "24"))  # remind this long before the due date
 # Demo knob: remind N minutes after the meeting ends instead of waiting for the due date (empty = off).
 DEMO_REMINDER_MIN = os.getenv("AMBER_DEMO_REMINDER_MINUTES", "")
-LIVE_STATES = {"joining", "joining_call", "in_waiting_room", "in_call_not_recording", "in_call_recording", "recording"}
+LIVE_STATES = {"scheduled", "joining", "joining_call", "in_waiting_room", "in_call_not_recording", "in_call_recording",
+               "recording"}
 recapping: set[int] = set()
 
 
@@ -592,6 +942,15 @@ async def post_meeting(mid: int, force: bool = False):
         return
     recapping.add(mid)
     try:
+        db.execute("UPDATE pending_confirmations SET resolved=3 WHERE meeting_id=? AND resolved=0", mid)  # expired
+        if not db.row("SELECT id FROM utterances WHERE meeting_id=? AND speaker!='Amber' LIMIT 1", mid):
+            # Never admitted / nobody spoke: an empty recap email would only confuse attendees.
+            mom = {"executive_summary": "No conversation was captured (Amber may not have been admitted to the call).",
+                   "agenda_alignment": [], "decisions": [], "open_questions": []}
+            db.execute("UPDATE meetings SET mom_json=? WHERE id=?", json.dumps(mom), mid)
+            _set_plain_status(mid, "completed")
+            publish("meeting.recap", mid, {"mom": mom})
+            return
         _set_plain_status(mid, "processing")
         try:
             mom = await brain.make_mom(mid)
@@ -653,7 +1012,7 @@ async def watch_bots():
         except Exception as e:
             print(f"[watch] bot {m['bot_id']}: {e!r}")
             continue
-        if code and code != m["status"]:
+        if code and code != m["status"] and code != "ready":  # "ready" = scheduled bot not dispatched yet
             _set_status(m["id"], code)  # done / call_ended / fatal also start the post-meeting pipeline
 
 

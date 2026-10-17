@@ -105,8 +105,46 @@ Check results with: `curl localhost:8000/api/meetings/<id>` (tasks) and `curl lo
 | J6 | Repeat J4, reply **"neither"** | "Okay, I won't update any record for that." No note written. |
 | J7 | "Rahul, I've sent the vendor quote already." | Rahul's task status changes (in progress / done), no new task. |
 
-## Not built yet (don't test these today)
-Recap email, follow-up reminder emails, attendance in a recap, recordings dashboard.
+## K. Raise hand (record question while people talk)
+
+| ID | Say / type | Pass if |
+|---|---|---|
+| K1 | "The Grundfos pump shipment got pushed out by three weeks." Keep talking for 3-4 lines. | Amber stays silent; chat gets "✋ Quick check … 1) PO-1041 … or 2) PO-1046 …". The dashboard live view shows the "hand raised" banner. |
+| K2 | "Amber, go ahead." | She asks the question out loud, short form ("…did you mean 1, PO-1041 … or 2, PO-1046 …"). |
+| K3 | "Amber, two" (or type "2" in chat) | "Got it, noted on PO-1046." The banner goes away. |
+
+## L. Recording on command
+
+| ID | Say / type | Pass if |
+|---|---|---|
+| L1 | "Amber, stop the recording." | She says it's paused and that you resume from chat; chat gets the same hint; dashboard shows "Recording paused". |
+| L2 | Talk for a bit, then type in chat "Amber, resume recording". | "Recording resumed, I'm listening again." Transcript picks up again. The paused part is missing from the recording. |
+| L3 | "Amber, start recording" while already recording. | "I'm already recording." |
+| L4 | Dashboard: Pause recording / Resume recording button. | Same as L1/L2 without speaking. |
+
+## M. Screen share (needs AMBER_SCREEN_VISION=1)
+
+| ID | Say / type | Pass if |
+|---|---|---|
+| M1 | Share a slide or sheet with a few numbers on it, wait ~3 s. | Dashboard activity: "<you> is sharing their screen". |
+| M2 | "Amber, what's the total on this slide?" | Answer read from the screen (takes ~1 s longer than a normal answer). |
+| M3 | Stop sharing, wait 2 min, "Amber, what's on the screen?" | She doesn't describe the old frame as if it were current. |
+
+## N. Hindi / Hinglish (set DEEPGRAM_LANGUAGE=multi for Hindi speech; en-IN copes with Hinglish only)
+
+| ID | Say | Pass if |
+|---|---|---|
+| N1 | "Amber, PO-1041 ka status kya hai?" | Hindi filler, then a Hindi answer with the record status. |
+| N2 | "Amber, marketing ka budget kitna hai?" | "मेरे पास अभी के रिकॉर्ड में यह जानकारी नहीं है।" |
+
+## O. Series memory, scheduling, recording playback (dashboard)
+
+| ID | Do | Pass if |
+|---|---|---|
+| O1 | After a meeting completes, send Amber to the next meeting of the same meet type and ask "Amber, what did we leave open last time?" | She names the open question from the previous MOM. |
+| O2 | Schedule a meet 15+ min ahead (with attendees). | The card shows "Scheduled"; opening it shows the join time and a Cancel button. Amber joins at that time. |
+| O3 | Cancel a scheduled meet. | Status "Cancelled", no recap email. |
+| O4 | Open a completed meeting's recap a few minutes after the call. | The recording plays in the video panel. |
 
 ## Known issues from the first live runs
 - The transcriber sometimes mishears "Amber" ("i'm very", "hamburger"). Sound-alikes are matched only

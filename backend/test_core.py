@@ -38,8 +38,12 @@ assert main.detect_platform("https://evil.com/meet.google.com") is None
 asked = []
 
 
-async def fake_answer(mid, speaker, question):
+screens_seen = []
+
+
+async def fake_answer(mid, speaker, question, screen_png=None):
     asked.append(question)
+    screens_seen.append(screen_png)
     await asyncio.sleep(0.15)  # answer is "in flight" for a moment, like the real API
     return brain.FALLBACK if "marketing" in question else f"answer to {speaker}"
 
@@ -275,11 +279,150 @@ assert c.post("/api/meetings/dispatch", json={"title": "d", "url": "https://meet
 assert c.get("/api/outbox/999999").status_code == 404
 
 # Every model down -> Amber says sorry instead of going silent.
-async def broken_answer(mid, speaker, question):
+async def broken_answer(mid, speaker, question, screen_png=None):
     raise RuntimeError("503 UNAVAILABLE")
 
 brain.answer = broken_answer
 say(d["bot_id"], "Akash", "Amber, what's the status of the VFD drives?")
 assert replies(d["id"])[0][-1] == brain.SORRY
+assert not [k for k in main.pending if k[0] == d["id"]]  # nothing left behind to leak into the next question
 brain.answer = fake_answer
+
+# --- Edge cases found in the final audit ---
+D = d["id"]
+# URL without a scheme is accepted; bad attendee emails are refused before anything is created.
+ok = c.post("/api/meetings/dispatch", json={"title": " ", "url": " meet.google.com/abc-defg-hij ", "replay": True})
+assert ok.status_code == 200 and db.row("SELECT url, title FROM meetings WHERE id=?", ok.json()["id"]) == \
+    {"url": "https://meet.google.com/abc-defg-hij", "title": "Meeting"}
+assert c.post("/api/meetings/dispatch", json={"title": "x", "url": "https://meet.google.com/q", "replay": True,
+              "attendees": [{"name": "R", "email": "r@x.com\nBcc: evil@x.com"}]}).status_code == 400
+# Operator API isn't reachable through the public tunnel; Recall's webhook is.
+assert c.get("/api/meetings", headers={"cf-connecting-ip": "1.2.3.4"}).status_code == 403
+assert c.post("/webhooks/recall?token=t", json={}, headers={"cf-connecting-ip": "1.2.3.4"}).status_code == 200
+# Owner email: full name wins; an ambiguous first name gets no email rather than the wrong person's.
+with db.db() as conn:
+    conn.executemany("INSERT INTO attendees VALUES (?,?,?)", [(D, "Rahul Mehta", "rm@x.com"), (D, "Rahul Shah", "rs@x.com")])
+assert main._attendee_email(D, "Rahul Shah") == "rs@x.com" and main._attendee_email(D, "Rahul") == ""
+# Sloppy model output doesn't crash the pass or store junk.
+asyncio.run(main.apply_extraction(D, {"tasks": [{"title": "Call vendor", "owner": "null", "due": "next Friday"}, "junk"],
+                                      "task_updates": [{"task_id": 99999, "status": "finished"}],
+                                      "record_notes": [{"record_id": "eq-201", "note": "Belt replaced",
+                                                        "confidence": "high", "candidates": "EQ-201"}]}))
+assert [(t["owner"], t["due_at"]) for t in db.rows("SELECT * FROM tasks WHERE meeting_id=?", D)] == [(None, None)]
+asyncio.run(main.apply_extraction(D, None))
+# Record ids are normalised: a confident lowercase id still writes.
+asyncio.run(main.apply_extraction(D, {"record_notes": [{"record_id": "eq-202", "note": "Filter swapped",
+                                                        "confidence": 0.9, "candidates": ["eq-202"]}]}))
+assert db.row("SELECT record_id FROM record_notes WHERE meeting_id=?", D)["record_id"] == "EQ-202"
+
+# Raise-hand: Amber's record question goes to chat with a hand up; "Amber, go ahead" makes her ask out loud.
+asyncio.run(main.apply_extraction(D, {"record_notes": [pump_note]}))
+assert c.get(f"/api/meetings/{D}").json()["hand_raised"].startswith("✋ Quick check")
+say(d["bot_id"], "Akash", "Amber, go ahead")
+time.sleep(0.3)
+assert "1, PO-1041, the Centrifugal pump" in replies(D)[0][-1]
+c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "Akash", "neither")).raise_for_status()
+time.sleep(0.2)
+assert c.get(f"/api/meetings/{D}").json()["hand_raised"] is None
+
+# Voice-commanded recording: pause (Amber explains how to resume, since she can't hear while paused) and resume.
+say(d["bot_id"], "Priya", "Amber, please stop the recording")
+time.sleep(0.3)
+assert db.row("SELECT recording_paused FROM meetings WHERE id=?", D)["recording_paused"] == 1
+assert "resume recording" in replies(D)[1][-1]["text"]
+c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "Priya", "Amber, resume recording")).raise_for_status()
+time.sleep(0.3)
+assert db.row("SELECT recording_paused FROM meetings WHERE id=?", D)["recording_paused"] == 0
+assert replies(D)[1][-1]["text"].startswith("Recording resumed")
+assert c.post(f"/api/meetings/{D}/recording/pause").json() == {"paused": True}
+assert c.post(f"/api/meetings/{D}/recording/explode").status_code == 404
+c.post(f"/api/meetings/{D}/recording/resume")
+
+# Screen vision: the latest screen-share frame reaches the answer only for screen questions.
+png = base64.b64encode(b"\x89PNG fake").decode()
+with c.websocket_connect("/ws/recall?token=t") as ws:
+    ws.send_text('{"event": "video_separate_png.data", "data": {"bot": {"id": "%s"}, "data": {"type": "webcam", '
+                 '"buffer": "x"}}}' % d["bot_id"])
+    ws.send_text('{"event": "video_separate_png.data", "data": {"bot": {"id": "%s"}, "data": {"type": "screenshare", '
+                 '"buffer": "%s", "participant": {"name": "Priya"}}}}' % (d["bot_id"], png))
+time.sleep(0.2)
+assert main.screens[D][0] == png
+screens_seen.clear()
+say(d["bot_id"], "Akash", "Amber, what does this slide say about the budget?")
+say(d["bot_id"], "Rahul", "Amber, who owns the boiler?")
+time.sleep(0.8)
+assert sorted(screens_seen, key=bool) == [None, b"\x89PNG fake"], screens_seen
+
+# Follow-up window: a question needs no "Amber", but a line naming someone else is for them.
+asked.clear()
+main.followup[D] = ("Akash", time.monotonic() + 10)
+say(d["bot_id"], "Akash", "Rahul, please send the quote by Friday.")
+time.sleep(0.4)
+assert asked == [], asked
+say(d["bot_id"], "Akash", "and when does it arrive?")
+time.sleep(0.4)
+assert asked == ["and when does it arrive?"], asked
+
+# Record tagging can't be talked into a guess: words that fit two records get a question even at confidence 1.0.
+recs_all = {r["id"]: r for r in db.rows("SELECT id, name, aliases FROM records")}
+assert main.which_records("the Grundfos shipment is delayed", recs_all) == ["PO-1041", "PO-1046"]
+assert main.which_records("the CR-32 pump arrived", recs_all) == ["PO-1041"]
+assert main.which_records("pump seals came in", recs_all) == ["PO-1042"]
+assert main.which_records("chiller service contract renewed", recs_all) == ["PO-1043"]
+assert main.which_records("it slipped again", recs_all) == []
+assert main.which_records("Chiller two flagged high vibration again on Tuesday", recs_all) == ["EQ-201"]
+assert main.which_records("the booster pump is stuck at customs", recs_all) == ["PO-1046"]
+assert len(main.which_records("the pump delivery slipped by two weeks", recs_all)) == 3  # three pump records
+assert main.which_records("PO-1046 shipped", recs_all) == ["PO-1046"]
+before = db.row("SELECT COUNT(*) n FROM record_notes")["n"]
+asyncio.run(main.apply_extraction(D, {"record_notes": [{"record_id": "PO-1041", "note": "Delayed 3 weeks",
+                                                        "confidence": 1.0, "candidates": ["PO-1041"],
+                                                        "quote": "The Grundfos pump shipment got pushed out"}]}))
+assert db.row("SELECT COUNT(*) n FROM record_notes")["n"] == before  # not written
+q_open = main.open_confirmation(D)["question"]
+assert "1) PO-1041" in q_open and "2) PO-1046" in q_open, q_open
+c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "Akash", "neither")).raise_for_status()
+time.sleep(0.2)
+
+# Hindi: questions get Hindi fillers, follow-ups in Hindi count, the fixed lines are said in Hindi.
+brain.answer = lambda *a, **k: asyncio.sleep(0, brain.FALLBACK)
+say(d["bot_id"], "Priya", "Amber, marketing ka budget kitna hai?")
+time.sleep(0.4)
+assert replies(D)[0][-1] == brain.FALLBACK_HI
+brain.answer = fake_answer
+assert main.filler_kind("Amber, PO-1041 ka status kya hai?") == "lookup_hi"
+assert main.is_addressed("अंबर, पंप का ऑर्डर कब आएगा?")
+
+# Long-term series memory: the next meeting of a series sees what the last one decided.
+s1 = c.post("/api/meetings/dispatch", json={"title": "Sync 1", "url": "https://meet.google.com/s", "replay": True,
+                                            "series_id": "ws:proc"}).json()["id"]
+db.execute("UPDATE meetings SET mom_json=? WHERE id=?",
+           '{"executive_summary": "First sync.", "decisions": ["Switch PPE vendor"], "open_questions": ["Compressor?"]}', s1)
+s2 = c.post("/api/meetings/dispatch", json={"title": "Sync 2", "url": "https://meet.google.com/s", "replay": True,
+                                            "series_id": "ws:proc"}).json()["id"]
+ctx = brain.build_context(s2)
+assert "Sync 1" in ctx and "decided: Switch PPE vendor" in ctx and "left open: Compressor?" in ctx
+assert "Switch PPE vendor" not in brain.build_context(D)  # other series don't leak in
+
+# Bot kicked / never admitted (fatal) still closes the meeting out, without emailing an empty recap.
+sent.clear()
+mailer._send_sync = lambda to, subject, html, text: sent.append(to)
+f = c.post("/api/meetings/dispatch", json={"title": "kicked", "url": "https://meet.google.com/k", "replay": True,
+                                           "attendees": [{"name": "A", "email": "a@x.com"}]}).json()
+c.post("/webhooks/recall?token=t", json=replay.payload(f["bot_id"], 0, "bot", "", "fatal")).raise_for_status()
+time.sleep(0.5)
+fm = c.get(f"/api/meetings/{f['id']}").json()
+assert fm["status"] == "completed" and "No conversation" in fm["mom"]["executive_summary"] and not sent, fm["status"]
+# Stop is idempotent after the meeting is over; a scheduled meeting is cancelled instead of recapped.
+assert c.post(f"/api/meetings/{f['id']}/stop").json() == {"ok": True}
+assert c.get(f"/api/meetings/{f['id']}").json()["status"] == "completed"
+db.execute("UPDATE meetings SET status='scheduled' WHERE id=?", s2)
+c.post(f"/api/meetings/{s2}/stop")
+assert c.get(f"/api/meetings/{s2}").json()["status"] == "cancelled"
+# Scheduling: a time well ahead is passed to Recall (UTC); sooner just joins now.
+from datetime import datetime, timedelta, timezone  # noqa: E402
+later = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+assert main._join_at(later).startswith(later[:16]) and main._join_at(datetime.now().isoformat()) is None
+assert c.post("/api/meetings/dispatch", json={"title": "x", "url": "https://meet.google.com/q", "replay": True,
+                                              "join_at": "tomorrow"}).status_code == 400
 print("ok")

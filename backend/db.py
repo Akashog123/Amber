@@ -63,9 +63,11 @@ def db():
 def init():
     with db() as c:
         c.executescript(SCHEMA)
-        # ponytail: hand-rolled migration for DBs created before tasks.quote; use a migration tool past a few
-        if "quote" not in {r[1] for r in c.execute("PRAGMA table_info(tasks)")}:
-            c.execute("ALTER TABLE tasks ADD COLUMN quote TEXT")
+        # ponytail: hand-rolled migrations for DBs created before these columns; use a migration tool past a few
+        for table, col, kind in [("tasks", "quote", "TEXT"), ("meetings", "recording_paused", "INTEGER DEFAULT 0"),
+                                 ("meetings", "join_at", "TEXT")]:
+            if col not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
 
 
 def rows(sql: str, *args) -> list[dict]:
@@ -97,4 +99,7 @@ def meeting_detail(meeting_id: int) -> dict | None:
         "record_notes": "SELECT * FROM record_notes WHERE meeting_id=? ORDER BY id",
     }.items():
         m[key] = rows(sql, meeting_id)
+    # Amber's open question (hand raised) until someone answers it
+    m["hand_raised"] = (row("SELECT question FROM pending_confirmations WHERE meeting_id=? AND resolved=0 "
+                            "ORDER BY id DESC LIMIT 1", meeting_id) or {}).get("question")
     return m

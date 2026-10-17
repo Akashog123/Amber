@@ -8,10 +8,53 @@ when to attend it, and what context or agenda to use.
 > application. The application schedules and controls Amber. Amber is the
 > participant that joins the external meeting.
 
-This repository currently contains the frontend prototype. It does **not** yet
-contain the production backend, meeting-platform adapters, authentication,
-agent runtime, or durable shared database. This document defines the intended
-product behavior and the contract the backend should expose to the frontend.
+This repository contains the **Amber Live POC**: the React dashboard plus a
+FastAPI backend (`backend/`) that sends Amber into real calls through Recall.ai.
+The sections after "Running the POC" describe the intended production design
+(auth, queues, adapters), which the POC deliberately leaves out.
+
+## Running the POC
+
+What it does, end to end: load agenda + document + mock records before the call →
+Amber joins (Recall.ai), transcribes (Deepgram nova-3, `en-IN`), answers out loud
+when addressed (or in chat), says "I don't have that information in my current
+records" instead of guessing → extracts tasks and tags discussion to mock
+procurement/equipment records, asking first (raised hand in chat) when the words
+fit more than one record → MOM + recap email to attendees → reminder emails to
+task owners. Also: pause/resume recording by voice or chat, screen-share questions,
+Hindi/Hinglish, memory across meetings of the same meet type, scheduled joins,
+recording playback.
+
+```bash
+# 1. Backend (Python 3.13, uv)
+cd backend
+cp .env.example .env          # fill in keys; every variable is explained there
+uv run uvicorn main:app --port 8000
+
+# 2. Public tunnel for Recall's webhooks (put the https URL in PUBLIC_URL, restart the backend)
+cloudflared tunnel --url http://localhost:8000
+
+# 3. Dashboard (proxies /api to :8000)
+pnpm install && pnpm dev      # http://localhost:5173
+```
+
+In the dashboard: create a workspace and a meet type, paste the Meet link, add
+attendees as `Name, email` lines, **Send Amber**, then admit "Amber" in Meet.
+`LIVE_TESTS.md` has the exact lines to say for every feature.
+
+Without a Recall key (or with `"replay": true`), `uv run python replay.py` plays
+a scripted meeting through the same webhook handler; `--email you@x.com` sends
+the recap and reminder to you. Tests: `uv run python test_core.py` (prints `ok`;
+all external APIs are stubbed).
+
+Notes:
+- The operator API only answers local requests; through the tunnel only
+  `/webhooks/recall` (token in the URL) and `/ws/recall` are reachable.
+- Meet guests must be admitted by the host; Workspace meetings may block guests.
+- `AMBER_DEMO_REMINDER_MINUTES=2` sends reminders 2 minutes after the call (demo);
+  leave it empty to remind 24 h before each due date.
+- While recording is paused Recall sends no transcript, so Amber can't hear
+  "resume": resume from the chat or the dashboard.
 
 ## Product model
 

@@ -248,3 +248,31 @@ splitting `App.tsx`, Gemini screen vision (unless all else is done), "<100 ms" b
   `language: multi` handles code-switching (check latency vs `en-IN`). Answer prompt: reply in the asker's language.
 - **Voice lag:** sentence-split TTS (send the first sentence while the rest synthesizes), measure Recall's
   output_audio playback delay, consider a faster reply model (turbo v2.5) with v4 only for fillers.
+
+---
+
+## 10. Status (2026-10-17)
+
+All five PDF stages and every Tier 2 item are built and verified live or by replay. Tier 3:
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Attendance | Done (join/leave webhooks → MOM attendance table). |
+| 2 | Chat monitoring + auto-reply | Done. |
+| 3 | Brevity cap | Done (prompt + token cap). |
+| 4 | Task logging + verbal progress | Done (extraction pass; updates go on existing tasks). |
+| 5 | Series memory | Done: meetings of one meet type share `series_id`; the last 3 MOMs (summary, decisions, open questions) and open tasks are in Amber's context. |
+| 6 | Past meetings dashboard + recording | Done: recap view plays the Recall video (`/api/meetings/{id}/recording` fetches a fresh pre-signed link). |
+| 7 | Voice-commanded recording | Done as pause/resume (one continuous file). Paused = no transcript, so resume is by chat or dashboard. |
+| 8 | Raise hand | Done as chat ✋ + dashboard banner; "Amber, go ahead" makes her ask aloud. No badge on her video tile (needs Output Media). |
+| 9 | Screen vision | Done on demand (`AMBER_SCREEN_VISION=1`): latest screen-share frame is sent with screen questions. Not continuous slide narration. |
+| 10 | <100 ms barge-in | Not claimed. Amber stops when someone talks (partials → `DELETE output_audio`, ~0.5–1 s). |
+
+Backlog (section 9): Monika Sogam voice is the default (samples in `backend/voice-samples/`, pick by ear);
+Hindi answers, fillers and fallback work (use `DEEPGRAM_LANGUAGE=multi` for Hindi speech); voice lag: reply
+voice is warmed at dispatch (first TTS call was 10–20 s cold). Sentence-split TTS was skipped: replies are
+1–2 sentences, so it would save ~0.2 s at the risk of gaps between clips.
+
+Also from the final audit: scheduled joins (Recall `join_at`, cancel = delete bot), operator API closed to
+tunnel traffic, `fatal` bots still get closed out, empty meetings send no recap, record notes need the
+speaker's words to point at one record (model confidence alone can't auto-write), sloppy LLM JSON is cleaned.

@@ -1,6 +1,6 @@
 // Live view of one Amber session: status, transcript, what Amber is doing, tasks and record notes as they appear.
 import { useCallback, useEffect, useRef, useState } from "react"
-import { ArrowLeft, Bot, CircleStop, ClipboardList, FileText, MessageSquareText, UsersRound } from "lucide-react"
+import { ArrowLeft, Bot, CircleStop, ClipboardList, FileText, Hand, MessageSquareText, MonitorUp, Pause, Play, UsersRound } from "lucide-react"
 import { api, isLive, statusLabel, timeOf, useAmberEvents, type AmberEvent, type ApiMeetingDetail } from "../api"
 
 type Activity = { id: number; at: string; kind: string; text: string; detail?: string }
@@ -17,7 +17,7 @@ function describe(event: AmberEvent): Omit<Activity, "id" | "at"> | null {
       return {
         kind: "reply",
         text: d.text,
-        detail: `to ${d.to} · ${d.via} · model ${l.llm}s + voice ${l.tts}s`,
+        detail: [d.to && `to ${d.to}`, d.via, l.llm != null && `model ${l.llm}s + voice ${l.tts}s`].filter(Boolean).join(" · "),
       }
     }
     case "amber.yielded":
@@ -28,6 +28,14 @@ function describe(event: AmberEvent): Omit<Activity, "id" | "at"> | null {
       return { kind: "error", text: "Couldn't answer", detail: String(d.error ?? "") }
     case "confirmation.asked":
       return { kind: "ask", text: String(d.question), detail: "waiting for a reply in chat" }
+    case "amber.hand_raised":
+      return { kind: "ask", text: "Raised hand: has a question about a record", detail: "says it aloud if invited (“Amber, go ahead”)" }
+    case "recording.paused":
+      return { kind: "yield", text: "Recording paused", detail: "Amber can't hear the call until it's resumed" }
+    case "recording.resumed":
+      return { kind: "note", text: "Recording resumed" }
+    case "screen.shared":
+      return { kind: "note", text: `${d.by} is sharing their screen`, detail: "Amber can answer questions about it" }
     case "confirmation.resolved":
       return { kind: "note", text: d.chosen ? `Confirmed by ${d.by}: ${d.chosen}` : `${d.by}: no record update` }
     case "record.noted":
@@ -64,6 +72,7 @@ export default function LiveMeeting({
   const [activity, setActivity] = useState<Activity[]>([])
   const [error, setError] = useState("")
   const [stopping, setStopping] = useState(false)
+  const [sharing, setSharing] = useState(false)
   const refetchTimer = useRef<number | undefined>(undefined)
   const transcriptEnd = useRef<HTMLDivElement>(null)
 
@@ -75,6 +84,7 @@ export default function LiveMeeting({
 
   useAmberEvents((event) => {
     if (event.meeting_id !== meetingId) return
+    if (event.type === "screen.shared") setSharing(true)
     const item = describe(event)
     if (item) setActivity((current) => [{ ...item, id: Date.now() + Math.random(), at: new Date().toISOString() }, ...current].slice(0, 60))
     window.clearTimeout(refetchTimer.current)
@@ -97,6 +107,16 @@ export default function LiveMeeting({
     }
   }
 
+  const toggleRecording = async () => {
+    if (!meeting) return
+    try {
+      await api.setRecording(meetingId, meeting.recording_paused ? "resume" : "pause")
+      load()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
   if (!meeting) {
     return (
       <div className="mx-auto mt-10 w-full max-w-[1240px] px-5 text-sm text-[#7a869b]">
@@ -106,6 +126,7 @@ export default function LiveMeeting({
   }
 
   const live = isLive(meeting.status)
+  const scheduled = meeting.status === "scheduled"
   const done = meeting.status === "completed"
 
   return (
@@ -132,15 +153,26 @@ export default function LiveMeeting({
         >
           {live && <span className="h-2 w-2 animate-pulse rounded-full bg-[#2c8d61]" />}
           {statusLabel(meeting.status)}
+          {scheduled && meeting.join_at && ` · joins ${new Date(meeting.join_at).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}`}
         </span>
-        {live ? (
+        {live && meeting.status === "in_call_recording" && (
+          <button
+            className="flex items-center gap-2 rounded-full border border-[#dce5f2] px-4 py-2 text-sm font-bold text-[#43516c] hover:bg-[#f5f8fd]"
+            type="button"
+            onClick={toggleRecording}
+          >
+            {meeting.recording_paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+            {meeting.recording_paused ? "Resume recording" : "Pause recording"}
+          </button>
+        )}
+        {live || scheduled ? (
           <button
             className="flex items-center gap-2 rounded-full border border-[#f0c4c4] px-4 py-2 text-sm font-bold text-[#c04d4d] hover:bg-[#fff5f5] disabled:opacity-50"
             type="button"
             onClick={stop}
             disabled={stopping}
           >
-            <CircleStop className="h-4 w-4" /> {stopping ? "Stopping…" : "Stop Amber"}
+            <CircleStop className="h-4 w-4" /> {stopping ? "Stopping…" : scheduled ? "Cancel" : "Stop Amber"}
           </button>
         ) : done ? (
           <button
@@ -153,6 +185,29 @@ export default function LiveMeeting({
         ) : null}
       </div>
       {error && <p className="text-sm font-semibold text-[#c94848]">{error}</p>}
+      {live && (meeting.hand_raised || meeting.recording_paused || sharing) ? (
+        <div className="flex flex-wrap gap-2">
+          {meeting.hand_raised && (
+            <p className="flex items-start gap-2 rounded-2xl border border-[#f3dca2] bg-[#fff8e6] px-4 py-2.5 text-sm text-[#7a5600]">
+              <Hand className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                <b>Amber has her hand raised.</b> {meeting.hand_raised.replace(/^✋\s*/, "")}
+                <span className="block text-xs text-[#9b7a2c]">Answer in the meeting chat, or say “Amber, go ahead” to hear it.</span>
+              </span>
+            </p>
+          )}
+          {meeting.recording_paused ? (
+            <p className="flex items-center gap-2 rounded-2xl bg-[#f1f4f8] px-4 py-2.5 text-sm font-semibold text-[#53617a]">
+              <Pause className="h-4 w-4" /> Recording paused: Amber isn't listening
+            </p>
+          ) : null}
+          {sharing && (
+            <p className="flex items-center gap-2 rounded-2xl bg-[#edf7f1] px-4 py-2.5 text-sm font-semibold text-[#2c8d61]">
+              <MonitorUp className="h-4 w-4" /> Screen share visible to Amber
+            </p>
+          )}
+        </div>
+      ) : null}
 
       <div className="grid min-h-0 gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
         <section className={`${card} flex max-h-[70vh] min-h-[420px] flex-col`}>
@@ -162,7 +217,7 @@ export default function LiveMeeting({
           <div className="mt-3 min-h-0 flex-1 space-y-2.5 overflow-y-auto pr-1">
             {meeting.transcript.length === 0 && (
               <p className="rounded-xl bg-[#f5f7fa] px-4 py-6 text-center text-sm text-[#7a869b]">
-                {live ? "Waiting for someone to speak…" : "No transcript."}
+                {scheduled ? "Amber joins at the scheduled time." : live ? "Waiting for someone to speak…" : "No transcript."}
               </p>
             )}
             {meeting.transcript.map((line, index) => {

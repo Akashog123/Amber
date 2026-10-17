@@ -14,6 +14,8 @@ export type ApiMeeting = {
   started_at: string | null
   ended_at: string | null
   created_at: string
+  join_at: string | null
+  recording_paused: number
 }
 
 export type ApiTask = {
@@ -49,6 +51,7 @@ export type ApiMeetingDetail = ApiMeeting & {
   chat: { sender: string; text: string; ts: string; is_amber: number }[]
   tasks: ApiTask[]
   record_notes: ApiRecordNote[]
+  hand_raised: string | null
 }
 
 export type ApiRecord = {
@@ -84,6 +87,7 @@ export type DispatchRequest = {
   series_id: string | null
   document_name?: string
   document_b64?: string
+  join_at?: string
 }
 
 export type AmberEvent = { type: string; meeting_id: number | null; data: Record<string, unknown> }
@@ -109,6 +113,8 @@ export const api = {
       body: JSON.stringify(body),
     }),
   stop: (id: number) => call<{ ok: boolean }>(`/meetings/${id}/stop`, { method: "POST" }),
+  setRecording: (id: number, action: "pause" | "resume") =>
+    call<{ paused: boolean }>(`/meetings/${id}/recording/${action}`, { method: "POST" }),
   resendRecap: (id: number) => call<ApiMeetingDetail>(`/meetings/${id}/recap`, { method: "POST" }),
   records: () => call<ApiRecord[]>("/records"),
   outbox: () => call<OutboxItem[]>("/outbox"),
@@ -140,6 +146,8 @@ export const isLive = (status: MeetingStatus) => LIVE_STATUSES.has(status)
 export const statusLabel = (status: MeetingStatus) =>
   ({
     queued: "Queued",
+    scheduled: "Scheduled",
+    cancelled: "Cancelled",
     joining: "Joining",
     joining_call: "Joining",
     in_waiting_room: "Waiting to be admitted",
@@ -168,7 +176,7 @@ export const toBase64 = (file: File) =>
 
 /** Backend meeting -> the dashboard's existing ScheduledMeet shape (ids prefixed "api-"). */
 export function toScheduledMeet(m: ApiMeeting): ScheduledMeet {
-  const start = m.started_at ?? m.created_at
+  const start = m.started_at ?? m.join_at ?? m.created_at
   const minutes =
     m.ended_at && start ? Math.max(1, Math.round((Date.parse(m.ended_at) - Date.parse(start)) / 60000)) : null
   const [workspaceId, categoryId] = (m.series_id ?? "").split(":") // dashboard dispatches use "workspace:category"
@@ -177,15 +185,15 @@ export function toScheduledMeet(m: ApiMeeting): ScheduledMeet {
     workspaceId: workspaceId || undefined,
     categoryId: categoryId || undefined,
     title: m.title,
-    time: timeOf(m.created_at),
+    time: timeOf(m.join_at ?? m.created_at),
     duration: isLive(m.status) ? "Live" : minutes ? `${minutes} min` : "-",
     type: statusLabel(m.status),
-    status: isLive(m.status) ? "upcoming" : "ended",
+    status: isLive(m.status) || m.status === "scheduled" ? "upcoming" : "ended",
     link: m.url,
   }
 }
 
-export const apiDateKey = (m: ApiMeeting) => dateKey(new Date(m.created_at))
+export const apiDateKey = (m: ApiMeeting) => dateKey(new Date(m.join_at ?? m.created_at))
 
 const TASK_STATUS: Record<string, "Completed" | "In progress" | "Started" | "Ongoing"> = {
   done: "Completed",

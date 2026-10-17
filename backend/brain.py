@@ -1,6 +1,7 @@
 """LLM reasoning. Any OpenAI-compatible server (LLM_BASE_URL, e.g. a local proxy) and/or Gemini.
 Grounded answers, task extraction, record tagging and the post-meeting MOM."""
 import asyncio
+import base64
 import json
 import os
 import re
@@ -14,6 +15,8 @@ import db
 
 FALLBACK = "I don't have that information in my current records."
 SORRY = "Sorry, I couldn't get that. Could you ask again?"
+FALLBACK_HI = "मेरे पास अभी के रिकॉर्ड में यह जानकारी नहीं है।"
+SORRY_HI = "माफ़ कीजिए, मैं समझ नहीं पाई। क्या आप फिर से पूछ सकते हैं?"
 # 2.5 models 404 for new keys. On 503 (overloaded), 429 or a timeout, fall through to the next model.
 MODELS = [os.getenv("GEMINI_MODEL", "gemini-3.5-flash"), "gemini-3.8-flash", "gemini-flash-latest"]
 CALL_TIMEOUT = float(os.getenv("GEMINI_TIMEOUT", "5"))  # an overloaded call otherwise hangs for minutes
@@ -36,8 +39,14 @@ use ONLY the CONTEXT, RECORDS, OPEN TASKS and TRANSCRIPT below. If that informat
 reply exactly: "{FALLBACK}"
 What people said in this meeting (TRANSCRIPT) is information you have: use it for questions like
 "what did I just say" or "what have we discussed".
+PREVIOUS MEETINGS are earlier meetings of this same series: use them for "what did we decide last time" questions.
+If a SCREEN image is attached, it is what is being screen-shared right now: use it for questions about the
+screen, slide, chart or document being shown.
 General knowledge or concept questions may be answered from your own knowledge.
-Never invent record IDs, dates, amounts or owners."""
+Never invent record IDs, dates, amounts or owners.
+Reply in the language of the question: a Hindi or Hinglish question gets a natural spoken Hindi reply in
+Devanagari script (keep record IDs like PO-1041 as they are); an English question gets English. The fallback
+line in Hindi is: "{FALLBACK_HI}\""""
 
 _client: genai.Client | None = None
 _http: httpx.AsyncClient | None = None
@@ -57,6 +66,9 @@ def build_context(mid: int, transcript_lines: int = 40) -> str:
                     "WHERE status != 'done' AND (series_id=? OR meeting_id=?)", m.get("series_id"), mid)
     lines = db.rows("SELECT speaker, text FROM utterances WHERE meeting_id=? ORDER BY id DESC LIMIT ?",
                     mid, transcript_lines)[::-1]
+    # Long-term series memory: what the last meetings of this series decided and left open.
+    prev = db.rows("SELECT title, created_at, mom_json FROM meetings WHERE series_id=? AND id<? AND mom_json IS NOT NULL "
+                   "ORDER BY id DESC LIMIT 3", m.get("series_id"), mid) if m.get("series_id") else []
     rec_txt = "\n".join(
         f"- {r['id']} [{r['kind']}] {r['name']} | status: {r['status']} | owner: {r['owner']} | {r['details']}"
         + "".join(f"\n    note ({n['ts'][:10]}): {n['note']}" for n in notes if n["record_id"] == r["id"])
@@ -65,10 +77,19 @@ def build_context(mid: int, transcript_lines: int = 40) -> str:
             f"CONTEXT:\n{m.get('context_text') or '-'}\n\nRECORDS:\n{rec_txt}\n\n"
             f"OPEN TASKS:\n" + ("\n".join(f"- #{t['id']} {t['title']} (owner {t['owner']}, due {t['due_at']}, "
                                           f"{t['status']})" for t in tasks) or "-")
+            + "\n\nPREVIOUS MEETINGS:\n" + ("\n".join(_mom_brief(p) for p in prev[::-1]) or "-")
             + "\n\nTRANSCRIPT (most recent last):\n" + "\n".join(f"{u['speaker']}: {u['text']}" for u in lines))
 
 
-async def chat_completion(model: str, system: str, prompt: str, max_tokens: int | None = None) -> str:
+def _mom_brief(p: dict) -> str:
+    mom = json.loads(p["mom_json"] or "{}")
+    return (f"- {p['title']} ({(p['created_at'] or '')[:10]}): {mom.get('executive_summary') or '-'}"
+            + "".join(f"\n    decided: {d}" for d in mom.get("decisions") or [])
+            + "".join(f"\n    left open: {q}" for q in mom.get("open_questions") or []))
+
+
+async def chat_completion(model: str, system: str, prompt: str, max_tokens: int | None = None,
+                          image_png: bytes | None = None) -> str:
     model, _, effort = model.partition("@")
     effort = effort or LLM_REASONING_EFFORT
     global _http
@@ -77,7 +98,10 @@ async def chat_completion(model: str, system: str, prompt: str, max_tokens: int 
         f"{LLM_BASE_URL}/chat/completions",
         headers={"Authorization": f"Bearer {os.getenv('LLM_API_KEY', '')}"},
         json={"model": model, "temperature": 0.2, "max_tokens": max_tokens or LLM_MAX_TOKENS,
-              "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+              "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt if not image_png else [
+                  {"type": "text", "text": prompt},
+                  {"type": "image_url",
+                   "image_url": {"url": "data:image/png;base64," + base64.b64encode(image_png).decode()}}]}],
               **({"reasoning_effort": effort} if effort else {})},
     )
     r.raise_for_status()
@@ -87,12 +111,15 @@ async def chat_completion(model: str, system: str, prompt: str, max_tokens: int 
     return (choice["message"].get("content") or "").strip()
 
 
-async def gemini(model: str, system: str, prompt: str, max_tokens: int | None = None) -> str:
+async def gemini(model: str, system: str, prompt: str, max_tokens: int | None = None,
+                 image_png: bytes | None = None) -> str:
     cfg = types.GenerateContentConfig(
         system_instruction=system, max_output_tokens=max_tokens or 120, temperature=0.2,
         thinking_config=types.ThinkingConfig(thinking_budget=0))  # thinking adds seconds of latency
     r = await asyncio.wait_for(
-        client().aio.models.generate_content(model=model, contents=prompt, config=cfg), CALL_TIMEOUT)
+        client().aio.models.generate_content(
+            model=model, config=cfg,
+            contents=[types.Part.from_bytes(data=image_png, mime_type="image/png"), prompt] if image_png else prompt), CALL_TIMEOUT)
     if r.candidates and r.candidates[0].finish_reason == types.FinishReason.MAX_TOKENS:
         raise RuntimeError(f"{model} hit the token cap, reply would be cut off")
     return (r.text or "").strip()
@@ -102,26 +129,27 @@ def providers() -> list[tuple[str, callable]]:
     """Ordered fallbacks: the OpenAI-compatible endpoint first, then Gemini models."""
     out = []
     if LLM_BASE_URL:
-        out += [(f"openai:{m}", lambda s, p, t, m=m: chat_completion(m, s, p, t)) for m in LLM_MODELS]
+        out += [(f"openai:{m}", lambda s, p, t, i, m=m: chat_completion(m, s, p, t, i)) for m in LLM_MODELS]
     if os.getenv("GEMINI_API_KEY"):
-        out += [(f"gemini:{m}", lambda s, p, t, m=m: gemini(m, s, p, t)) for m in MODELS]
+        out += [(f"gemini:{m}", lambda s, p, t, i, m=m: gemini(m, s, p, t, i)) for m in MODELS]
     return out
 
 
-async def complete(system: str, prompt: str, max_tokens: int | None = None) -> str:
+async def complete(system: str, prompt: str, max_tokens: int | None = None, image_png: bytes | None = None) -> str:
     err: Exception = RuntimeError("no LLM configured: set LLM_BASE_URL or GEMINI_API_KEY")
     for name, call in providers():
         try:
-            return await call(system, prompt, max_tokens)
+            return await call(system, prompt, max_tokens, image_png)
         except Exception as e:  # 429 / 503 overload / timeout / truncation -> try the next one
             print(f"[brain] {name} failed: {type(e).__name__} {str(e)[:80]}")
             err = e
     raise err
 
 
-async def answer(mid: int, speaker: str, question: str) -> str:
-    prompt = f"{build_context(mid)}\n\n{speaker} asked Amber: {question}"
-    return await complete(ANSWER_RULES, prompt) or FALLBACK
+async def answer(mid: int, speaker: str, question: str, screen_png: bytes | None = None) -> str:
+    screen = "SCREEN: the attached image is the current screen share.\n\n" if screen_png else ""
+    prompt = f"{build_context(mid)}\n\n{screen}{speaker} asked Amber: {question}"
+    return await complete(ANSWER_RULES, prompt, image_png=screen_png) or FALLBACK
 
 
 EXTRACT_RULES = """You keep the action items and the record system up to date for a live work meeting.
@@ -184,6 +212,13 @@ someone made is a task, not a decision. If there was no agenda, use an empty age
 Use empty lists when nothing applies. Lines from "Amber" are the AI assistant's answers."""
 
 
+MOM_MAX_CHARS = int(os.getenv("AMBER_MOM_MAX_CHARS", "80000"))  # ~20k tokens; a long meeting keeps its latest part
+
+
+def _tail(text: str) -> str:
+    return text if len(text) <= MOM_MAX_CHARS else "[earlier part of the meeting omitted]\n" + text[-MOM_MAX_CHARS:]
+
+
 async def make_mom(mid: int) -> dict:
     """Narrative parts of the MOM from the LLM. Facts (tasks, record notes, attendance) are added by the caller
     straight from the database, so they can't be hallucinated."""
@@ -195,7 +230,7 @@ async def make_mom(mid: int) -> dict:
               "TASKS CAPTURED:\n" + ("\n".join(f"- {t['owner']}: {t['title']} (due {t['due_at']}, {t['status']})"
                                               for t in tasks) or "-")
               + "\n\nRECORD UPDATES:\n" + ("\n".join(f"- {n['record_id']}: {n['note']}" for n in notes) or "-")
-              + "\n\nTRANSCRIPT:\n" + "\n".join(f"{u['speaker']}: {u['text']}" for u in lines))
+              + "\n\nTRANSCRIPT:\n" + _tail("\n".join(f"{u['speaker']}: {u['text']}" for u in lines)))
     out = _parse_json(await complete(MOM_RULES, prompt, max_tokens=1500))
     return {k: out.get(k) or ([] if k != "executive_summary" else "") for k in
             ("executive_summary", "agenda_alignment", "decisions", "open_questions")}

@@ -98,6 +98,7 @@ type ScheduleDraft = {
   duration: string
   recurrence: "once" | "daily" | "weekdays" | "weekly" | "monthly"
   occurrences: number
+  attendees: string
 }
 
 type Workspace = {
@@ -1643,7 +1644,7 @@ function ScheduleMeetModal({
   initialMeeting?: ScheduledMeet | null
   initialDate: string
   onClose: () => void
-  onSave: (draft: ScheduleDraft) => void
+  onSave: (draft: ScheduleDraft) => void | Promise<void>
 }) {
   const defaultWorkspaceId = initialWorkspaceId || workspaces[0]?.id || ""
   const defaultCategoryId =
@@ -1660,6 +1661,8 @@ function ScheduleMeetModal({
   const [recurrence, setRecurrence] =
     useState<ScheduleDraft["recurrence"]>("once")
   const [occurrences, setOccurrences] = useState(8)
+  const [attendees, setAttendees] = useState("")
+  const [saving, setSaving] = useState(false)
   const [overallContextExpanded, setOverallContextExpanded] = useState(false)
   const selectedWorkspace = workspaces.find(({ id }) => id === workspaceId)
   const selectedCategory = selectedWorkspace?.categories.find(
@@ -1782,6 +1785,16 @@ function ScheduleMeetModal({
                 value={link}
                 onChange={(event) => setLink(event.target.value)}
                 placeholder="Google Meet, Zoom, or Microsoft Teams link"
+              />
+            </label>
+            <label className="block">
+              <span className="font-bold">Attendees</span>
+              <span className="ml-2 text-xs text-[#8792a8]">one per line: Name, email (for the recap and reminders)</span>
+              <textarea
+                className="mt-2 h-20 w-full resize-none rounded-xl border border-[#cbd6e6] px-4 py-3 text-sm outline-none placeholder:text-[#8792a8] focus:border-[#3479f5] focus:ring-4 focus:ring-[#3479f5]/10"
+                value={attendees}
+                onChange={(event) => setAttendees(event.target.value)}
+                placeholder={"Rahul Mehta, rahul@company.com\nPriya, priya@company.com"}
               />
             </label>
 
@@ -1942,23 +1955,29 @@ function ScheduleMeetModal({
             className="rounded-full bg-[#3479f5] px-8 py-3 font-bold text-white disabled:opacity-50"
             type="button"
             disabled={
-              !title.trim() || !workspaceId || !categoryId || !link.trim()
+              saving || !title.trim() || !workspaceId || !categoryId || !link.trim()
             }
-            onClick={() =>
-              onSave({
-                title: title.trim(),
-                workspaceId,
-                categoryId,
-                link: link.trim(),
-                startDate,
-                time,
-                duration,
-                recurrence,
-                occurrences,
-              })
-            }
+            onClick={async () => {
+              setSaving(true) // one click = one set of Recall bots
+              try {
+                await onSave({
+                  title: title.trim(),
+                  workspaceId,
+                  categoryId,
+                  link: link.trim(),
+                  startDate,
+                  time,
+                  duration,
+                  recurrence,
+                  occurrences,
+                  attendees,
+                })
+              } finally {
+                setSaving(false)
+              }
+            }}
           >
-            Schedule
+            {saving ? "Scheduling…" : "Schedule"}
           </button>
         </div>
       </div>
@@ -3282,6 +3301,7 @@ function MeetingDetail({
     "summary",
   )
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [videoMissing, setVideoMissing] = useState(false) // Recall still processing, or recording disabled
   const videoRef = useRef<HTMLDivElement>(null)
   const people = meeting.review?.participants ?? []
   const tasks = meeting.review?.tasks ?? []
@@ -3370,11 +3390,13 @@ function MeetingDetail({
             ref={videoRef}
             className="group relative mx-auto flex min-h-0 w-full flex-1 overflow-hidden rounded-[20px] bg-[#171e2c] shadow-[0_18px_48px_rgba(19,30,50,0.18)]"
           >
-            {meeting.review?.recordingUrl ? (
+            {meeting.review?.recordingUrl && !videoMissing ? (
               <video
                 className="absolute inset-0 h-full w-full object-contain"
                 src={meeting.review.recordingUrl}
                 controls
+                preload="metadata"
+                onError={() => setVideoMissing(true)}
               />
             ) : (
               <div className="absolute inset-0 grid place-items-center bg-[radial-gradient(circle_at_center,#303b50_0%,#171e2c_72%)] px-6 text-center text-white">
@@ -4033,7 +4055,7 @@ function Dashboard() {
   }
   const openApiMeeting = async (apiId: number) => {
     const m = apiMeetings.find(({ id }) => id === apiId)
-    if (m && isLive(m.status)) {
+    if (m && (isLive(m.status) || m.status === "scheduled")) {
       setLiveMeetingId(apiId)
       return
     }
@@ -4157,7 +4179,7 @@ function Dashboard() {
     setCategoryWorkspaceId(null)
   }
 
-  const scheduleMeeting = (draft: ScheduleDraft) => {
+  const scheduleMeeting = async (draft: ScheduleDraft) => {
     const workspace = workspaces.find(({ id }) => id === draft.workspaceId)
     const category = workspace?.categories.find(
       ({ id }) => id === draft.categoryId,
@@ -4185,6 +4207,34 @@ function Dashboard() {
         current = addDays(current, 7)
       }
     }
+
+    // Each occurrence becomes a scheduled Amber session on the backend: Recall sends her in at that time, and the
+    // shared series id gives later occurrences the memory of earlier ones. Calendar-only if the backend is down.
+    const scheduled = await Promise.allSettled(
+      dates.map((date) =>
+        api.dispatch({
+          title: draft.title,
+          url: draft.link,
+          agenda: "",
+          context: category.agenda ?? "",
+          attendees: parseAttendees(draft.attendees),
+          series_id: `${workspace.id}:${category.id}`,
+          join_at: new Date(`${dateKey(date)}T${draft.time}`).toISOString(),
+        }),
+      ),
+    )
+    const failed = scheduled.filter((r) => r.status === "rejected")
+    if (failed.length < scheduled.length) {
+      void loadApiMeetings()
+      if (failed.length) setBackendError(`${failed.length} of ${scheduled.length} occurrences couldn't be scheduled.`)
+      setScheduleModalOpen(false)
+      setSchedulePreset(null)
+      setSelectedDate(firstDate)
+      return
+    }
+    setBackendError(
+      `Saved to the calendar only: ${(failed[0] as PromiseRejectedResult).reason?.message ?? "backend unreachable"}`,
+    )
 
     const displayTime = new Date(`2026-01-01T${draft.time}`).toLocaleTimeString(
       "en-US",
