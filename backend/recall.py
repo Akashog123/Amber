@@ -58,12 +58,16 @@ def recording_config(webhook_url: str, keyterms: list[str], ws_url: str | None =
 
 
 async def create_bot(meeting_url: str, webhook_url: str, keyterms: list[str] = (), ws_url: str | None = None,
-                     join_at: str | None = None) -> str:
+                     join_at: str | None = None, media_url: str | None = None) -> str:
+    # Two ways for Amber to talk: a webpage Recall renders as her camera tile, whose audio is her voice (streamed,
+    # instant stop), or mp3 clips via output_audio. Recall allows one or the other, not both.
+    voice = ({"output_media": {"camera": {"kind": "webpage", "config": {"url": media_url}}}} if media_url else
+             {"automatic_audio_output": {"in_call_recording": {"data": {"kind": "mp3", "b64_data": _SILENCE}}}})
     body = {
         "meeting_url": meeting_url,
         "bot_name": "Amber",
         "recording_config": recording_config(webhook_url, list(keyterms), ws_url),
-        "automatic_audio_output": {"in_call_recording": {"data": {"kind": "mp3", "b64_data": _SILENCE}}},
+        **voice,
         **({"join_at": join_at} if join_at else {}),  # scheduled meeting: Recall sends the bot at that time
     }
     async with _client() as c:

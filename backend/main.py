@@ -19,7 +19,7 @@ for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(errors="backslashreplace")
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect  # noqa: E402
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 import db  # noqa: E402
@@ -44,7 +44,7 @@ seed.seed()  # creates tables + mock records; idempotent
 WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN", "")
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 # The public tunnel exists for Recall's webhooks only; the operator API stays local (the dashboard proxies to it).
-PUBLIC_PATHS = ("/webhooks/", "/ws/")
+PUBLIC_PATHS = ("/webhooks/", "/ws/", "/media/")  # /media/: the page Recall renders as Amber's camera + voice
 
 
 @app.middleware("http")
@@ -127,6 +127,7 @@ class Dispatch(BaseModel):
     join_at: str | None = None  # ISO time for a scheduled meeting; Recall sends Amber in then (empty = now)
 
 
+VOICE_MODE = os.getenv("AMBER_VOICE_MODE", "mp3")  # stream = Output Media page (streamed voice, instant stop)
 EMAIL = re.compile(r"^[^@\s,<>]+@[^@\s,<>]+\.[a-z]{2,}$", re.I)
 SCREEN_VISION = os.getenv("AMBER_SCREEN_VISION", "") == "1"
 
@@ -179,8 +180,9 @@ async def dispatch(body: Dispatch):
         base = os.environ["PUBLIC_URL"].rstrip("/")
         hook = f"{base}/webhooks/recall?token={WEBHOOK_TOKEN}"
         ws = f"{base.replace('https://', 'wss://', 1)}/ws/recall?token={WEBHOOK_TOKEN}" if SCREEN_VISION else None
+        page = f"{base}/media/amber?m={mid}&token={WEBHOOK_TOKEN}" if VOICE_MODE == "stream" else None
         try:
-            bot_id = await recall.create_bot(body.url, hook, keyterms(mid), ws, join_at)
+            bot_id = await recall.create_bot(body.url, hook, keyterms(mid), ws, join_at, page)
         except Exception as e:
             db.execute("UPDATE meetings SET status='failed' WHERE id=?", mid)
             detail = getattr(getattr(e, "response", None), "text", "") or str(e)
@@ -191,7 +193,7 @@ async def dispatch(body: Dispatch):
     db.execute("UPDATE meetings SET bot_id=?, status=? WHERE id=?", bot_id, status, mid)
     publish("meeting.status", mid, {"status": status})
     if os.getenv("ELEVENLABS_API_KEY") and not join_at:
-        _spawn(voice.warm_fillers())  # synthesize + cache fillers before anyone asks anything
+        _spawn(voice.warm_fillers(VOICE_MODE == "stream"))  # synthesize + cache fillers before anyone asks anything
     return {"id": mid, "bot_id": bot_id, "status": status}
 
 
@@ -296,7 +298,7 @@ def _set_status(mid: int, status: str):
                *([status, db.now(), mid] if col else [status, mid]))
     publish("meeting.status", mid, {"status": status})
     if status == "joining_call" and prev == "scheduled" and os.getenv("ELEVENLABS_API_KEY"):
-        _spawn(voice.warm_fillers())  # scheduled bot is on its way in
+        _spawn(voice.warm_fillers(VOICE_MODE == "stream"))  # scheduled bot is on its way in
     if status in CALL_OVER and prev not in CALL_OVER:
         _spawn(final_extract(mid))
         forget(mid)
@@ -626,11 +628,84 @@ async def say(mid: int, text: str, via_chat: bool = False):
         publish("amber.reply", mid, {"to": "", "question": "", "text": text, "via": "voice", "latency": {}})
 
 
+PCM_BPS = voice.PCM_RATE * 2  # bytes per second of streamed speech
+media_sockets: dict[int, WebSocket] = {}  # meeting -> its Output Media page (streaming voice)
+interrupted: dict[int, int] = {}          # meeting -> times someone talked over Amber (stops a stream mid-way)
+
+
+async def media_send(mid: int, payload: dict | bytes) -> bool:
+    ws = media_sockets.get(mid)
+    if not ws:
+        return False
+    try:
+        await (ws.send_bytes(payload) if isinstance(payload, bytes) else ws.send_text(json.dumps(payload)))
+        return True
+    except Exception as e:  # page went away; it reconnects on its own
+        print(f"[media] meeting {mid}: send failed: {e!r}")
+        return False
+
+
+async def stream_speech(mid: int, text: str):
+    """Speak through the page: forward PCM as ElevenLabs makes it (first sound ~0.4 s, no clip upload)."""
+    turn, start, sent = interrupted.get(mid, 0), time.monotonic(), 0
+    speaking_until[mid] = start + 1.0  # until the first chunk arrives; barge-in works from the start
+    try:
+        async for chunk in voice.tts_stream(text):
+            if interrupted.get(mid, 0) != turn or not await media_send(mid, chunk):
+                return  # someone talked over her, or the page dropped: stop sending
+            sent += len(chunk)
+            speaking_until[mid] = max(speaking_until[mid], start + sent / PCM_BPS)
+    except Exception as e:
+        print(f"[amber] streamed tts failed: {e!r}")
+        publish("amber.error", mid, {"question": "", "error": f"tts: {e}"})
+    finally:
+        if interrupted.get(mid, 0) == turn:
+            conv(mid).spoke_until = speaking_until.get(mid, 0) + OTHERS_WINDOW
+
+
+@app.get("/media/amber")
+async def media_page():
+    return FileResponse(os.path.join(os.path.dirname(__file__), "assets", "amber_media.html"))
+
+
+@app.websocket("/ws/media")
+async def media_ws(ws: WebSocket):
+    """Amber's Output Media page connects here; audio and control messages flow down it."""
+    if WEBHOOK_TOKEN and ws.query_params.get("token") != WEBHOOK_TOKEN:
+        await ws.close(code=1008)
+        return
+    try:
+        mid = int(ws.query_params.get("m", ""))
+    except ValueError:
+        await ws.close(code=1008)
+        return
+    await ws.accept()
+    media_sockets[mid] = ws
+    print(f"[media] meeting {mid}: page connected")
+    db_hand = (db.meeting_detail(mid) or {}).get("hand_raised")
+    await media_send(mid, {"type": "hand", "on": bool(db_hand)})
+    try:
+        while (await ws.receive())["type"] != "websocket.disconnect":
+            pass
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if media_sockets.get(mid) is ws:
+            media_sockets.pop(mid)
+        print(f"[media] meeting {mid}: page disconnected")
+
+
 async def speak(mid: int, text: str, mp3: bytes | None = None, wait: bool = True):
     """Say `text` in the call and log it as Amber's line. Never raises: a voice failure must not kill the reply.
     wait=False: the caller already timed this (an answer starts slightly before its own filler ends)."""
     db.execute("INSERT INTO utterances (meeting_id,speaker,text,ts,addressed) VALUES (?,?,?,?,0)",
                mid, "Amber", text, None)
+    if mid in media_sockets and os.getenv("ELEVENLABS_API_KEY"):  # streaming page: no clip to prepare
+        async with voice_locks.setdefault(mid, asyncio.Lock()):
+            if wait and (left := speaking_until.get(mid, 0) - time.monotonic()) > 0:
+                await asyncio.sleep(min(left, 20))
+            await stream_speech(mid, text)
+        return
     if mp3 is None and os.getenv("ELEVENLABS_API_KEY"):
         try:
             mp3 = await voice.tts(text)
@@ -658,13 +733,17 @@ async def speak(mid: int, text: str, mp3: bytes | None = None, wait: bool = True
 async def _play_filler(mid: int, kind: str):
     text = voice.pick_filler(kind)
     publish("amber.filler", mid, {"text": text})
-    bot = _real_bot(mid)
-    if not bot or not os.getenv("ELEVENLABS_API_KEY"):
+    if not os.getenv("ELEVENLABS_API_KEY"):
         return
     try:
-        mp3 = await voice.filler_mp3(text)
-        await recall.output_audio(bot, mp3)
-        filler_until[mid] = speaking_until[mid] = time.monotonic() + len(mp3) / 16000
+        if mid in media_sockets:  # streaming page
+            pcm = await voice.filler_pcm(text)
+            await media_sockets[mid].send_bytes(pcm)
+            filler_until[mid] = speaking_until[mid] = time.monotonic() + len(pcm) / PCM_BPS
+        elif bot := _real_bot(mid):
+            mp3 = await voice.filler_mp3(text)
+            await recall.output_audio(bot, mp3)
+            filler_until[mid] = speaking_until[mid] = time.monotonic() + len(mp3) / 16000
     except Exception as e:
         print(f"[amber] filler failed: {e!r}")
 
@@ -678,7 +757,10 @@ def yield_floor(mid: int):
     """A human started talking while Amber's audio is playing -> stop it."""
     if time.monotonic() < speaking_until.get(mid, 0):
         speaking_until[mid] = 0
-        if bot := _real_bot(mid):
+        interrupted[mid] = interrupted.get(mid, 0) + 1  # a stream still sending stops sending
+        if mid in media_sockets:
+            _spawn(media_send(mid, {"type": "stop"}))  # the page cuts its audio at once
+        elif bot := _real_bot(mid):
             _spawn(recall.stop_audio(bot))
         publish("amber.yielded", mid, {})
 
@@ -716,7 +798,7 @@ async def _answer(mid: int, speaker: str, q: dict, delay: float, via_chat: bool)
         return
     t_llm = time.perf_counter()
     try:
-        mp3 = None if via_chat or not os.getenv("ELEVENLABS_API_KEY") else await voice.tts(text)
+        mp3 = None if via_chat or mid in media_sockets or not os.getenv("ELEVENLABS_API_KEY") else await voice.tts(text)
     except Exception as e:
         print(f"[amber] tts failed: {e!r}")
         publish("amber.error", mid, {"question": question, "error": f"tts: {e}"})
@@ -930,6 +1012,7 @@ async def ask_which_record(mid: int, n: dict, cands: list[str], records: dict):
                mid, question, json.dumps({"candidates": cands, "note": n}), db.now())
     publish("confirmation.asked", mid, {"question": question, "candidates": cands})
     publish("amber.hand_raised", mid, {"question": question})
+    _spawn(media_send(mid, {"type": "hand", "on": True}))  # badge on her camera tile (streaming page)
     await amber_chat(mid, question)
 
 
@@ -973,6 +1056,7 @@ def resolve_confirmation(mid: int, who: str, text: str) -> bool:
         _spawn(amber_chat(mid, nxt["question"]))
     else:
         publish("amber.hand_lowered", mid, {})
+        _spawn(media_send(mid, {"type": "hand", "on": False}))
     return True
 
 

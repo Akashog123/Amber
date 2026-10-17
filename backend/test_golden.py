@@ -96,7 +96,7 @@ def replay(events: list[dict], extract_script: list[dict] = (), real_classifier:
     brain.is_for_amber = stub_is_for_amber
     voice.tts = lambda text, model=None: asyncio.sleep(0, silence(REPLY_AUDIO))
     voice.filler_mp3 = lambda text: asyncio.sleep(0, silence(FILLER_AUDIO))
-    voice.warm_fillers = lambda: asyncio.sleep(0)
+    voice.warm_fillers = lambda *a: asyncio.sleep(0)
     for name in ("DEBOUNCE", "BARE_WAIT", "FOLLOWUP"):
         setattr(main, name, getattr(main, name) / SPEED)
     with TestClient(main.app) as c:

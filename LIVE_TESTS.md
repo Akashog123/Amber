@@ -151,3 +151,12 @@ Check results with: `curl localhost:8000/api/meetings/<id>` (tasks) and `curl lo
   near the start of a line and only when the line is a request.
 - When asked who made her, she said "Google". Fixed: her instructions now say she was built by this team. Re-check with "Amber, who made you?"
 - Gemini free-tier latency spikes (seen 4.6–6.8 s for the model call alone on some replies).
+
+## P. Streaming voice (set AMBER_VOICE_MODE=stream, restart the backend, send a new Amber)
+
+| ID | Do / say | Pass if |
+|---|---|---|
+| P1 | Look at Amber's tile in Meet. | It shows her card ("Amber", "Listening"), not a blank tile. |
+| P2 | "Amber, what's the status of the boiler?" | Filler within ~1 s, answer starts noticeably sooner than in mp3 mode; tile says "Speaking" while she talks. |
+| P3 | Ask something long ("…tell me about the chiller contract in detail"), then talk over her. | She stops at once (no trailing words). |
+| P4 | Trigger a raised hand (K1). | Her tile shows the ✋ badge; it clears when you answer. |

@@ -32,7 +32,7 @@ cp .env.example .env          # fill in keys; every variable is explained there
 uv run uvicorn main:app --port 8000
 
 # 2. Public tunnel for Recall's webhooks (put the https URL in PUBLIC_URL, restart the backend)
-cloudflared tunnel --url http://localhost:8000
+cloudflared tunnel --url http://127.0.0.1:8000
 
 # 3. Dashboard (proxies /api to :8000)
 pnpm install && pnpm dev      # http://localhost:5173

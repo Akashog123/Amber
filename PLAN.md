@@ -279,3 +279,15 @@ speaker's words to point at one record (model confidence alone can't auto-write)
 
 Known limit: reminder times use the backend machine's timezone (the operator's). Store a per-attendee timezone
 if attendees ever span timezones.
+
+### Turn-taking redesign + streaming voice (2026-10-17, after the live rehearsals)
+
+- `backend/turns.py`: one Conversation per meeting and one `route()` for every line (ignore / start / append /
+  merge / queue / classify), replacing six independent windows. Unclear lines inside an open conversation go to a
+  yes/no model check; outside one they're ignored, so cost stays at ~2 extra small calls per meeting.
+- "Why" log: every decision is published (`amber.decision`) and shown in the live view's activity feed.
+- Evals: `test_golden.py` replays real calls (`backend/golden/`); `eval_scenarios.py` replays model-written
+  meetings (6 so far: 15/16 requests answered, 0 false triggers).
+- Streaming voice (`AMBER_VOICE_MODE=stream`): Recall Output Media page (`/media/amber`) plays PCM as ElevenLabs
+  streams it; first sound ~0.9 s after the question, interruptions stop it instantly, raised-hand badge on her
+  tile. Verified locally in headless Chrome; not yet on a live Recall bot (LIVE_TESTS section P).

@@ -450,6 +450,32 @@ db.execute("INSERT INTO utterances (meeting_id,speaker,text,ts,addressed) VALUES
 assert "Amber (your earlier reply): Earlier." in brain.build_context(D)
 brain.complete = real_complete
 
+# Streaming voice (Output Media page): filler + answer go down the page's socket as PCM; talking over her stops it.
+import voice  # noqa: E402
+
+
+async def fake_stream(text, model=None):
+    for _ in range(3):
+        yield b"\0" * 64000  # 3 x 2 s of audio
+
+
+voice.tts_stream, voice.filler_pcm = fake_stream, lambda text: asyncio.sleep(0, b"\0" * 8000)
+os.environ["ELEVENLABS_API_KEY"] = "stub"
+with c.websocket_connect(f"/ws/media?m={D}&token=t") as page:
+    assert page.receive_json() == {"type": "hand", "on": False}
+    say(d["bot_id"], "Akash", "Amber, who owns the boiler?")
+    frames = [len(page.receive_bytes()) for _ in range(4)]
+    assert frames == [8000, 64000, 64000, 64000], frames  # filler, then the streamed answer
+    words = [{"text": w, "start_timestamp": {"relative": i * 0.4}, "end_timestamp": {"relative": i * 0.4 + 0.35}}
+             for i, w in enumerate("hold on one sec".split())]
+    c.post("/webhooks/recall?token=t", json={"event": "transcript.partial_data", "data": {
+        "data": {"words": words, "participant": {"name": "Priya"}}, "bot": {"id": d["bot_id"]}}}).raise_for_status()
+    assert page.receive_json() == {"type": "stop"}
+assert c.get("/media/amber").status_code == 200 and "amberStats" in c.get("/media/amber").text
+assert c.get("/media/amber", headers={"cf-connecting-ip": "1.2.3.4"}).status_code == 200  # Recall loads it via the tunnel
+os.environ["ELEVENLABS_API_KEY"] = ""
+time.sleep(0.3)
+
 # Cancel + new question in one breath (seen live): the old one is dropped, the new one answered.
 asked.clear()
 say(d["bot_id"], "Priya", "Amber, what's the boiler status")

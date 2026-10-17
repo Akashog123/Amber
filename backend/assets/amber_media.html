@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Amber</title>
+<style>
+  /* Rendered by Recall's bot as Amber's camera tile; its audio is Amber's voice in the call. */
+  :root { --bg1: #1d2a44; --bg2: #0f1626; --amber: #f5a524; --text: #f3f5f9; --muted: #9aa7bd; }
+  html, body { margin: 0; height: 100%; background: radial-gradient(circle at 50% 40%, var(--bg1), var(--bg2) 75%);
+    color: var(--text); font-family: "Segoe UI", system-ui, sans-serif; overflow: hidden; }
+  .stage { height: 100%; display: grid; place-items: center; }
+  .card { text-align: center; }
+  .avatar { width: 220px; height: 220px; border-radius: 50%; margin: 0 auto; display: grid; place-items: center;
+    background: linear-gradient(145deg, #ffb84a, #e58a00); font-size: 104px; font-weight: 800; color: #1d2a44;
+    box-shadow: 0 0 0 0 rgba(245, 165, 36, .55); transition: box-shadow .2s; }
+  body.speaking .avatar { animation: pulse 1.1s ease-out infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(245,165,36,.55); } 100% { box-shadow: 0 0 0 46px rgba(245,165,36,0); } }
+  h1 { margin: 28px 0 6px; font-size: 54px; letter-spacing: -.02em; }
+  .status { font-size: 26px; color: var(--muted); }
+  .hand { position: absolute; top: 36px; left: 50%; transform: translateX(-50%); display: none;
+    background: #fff4db; color: #7a5600; border-radius: 999px; padding: 14px 30px; font-size: 28px; font-weight: 700; }
+  body.hand-up .hand { display: block; }
+  .offline { position: absolute; bottom: 24px; width: 100%; text-align: center; color: #c97a7a; font-size: 18px; }
+</style>
+</head>
+<body>
+<div class="hand">✋ Amber has a question about a record (see chat)</div>
+<div class="stage"><div class="card">
+  <div class="avatar">A</div>
+  <h1>Amber</h1>
+  <div class="status" id="status">Listening</div>
+</div></div>
+<div class="offline" id="offline"></div>
+<script>
+  const params = new URLSearchParams(location.search);
+  const RATE = 16000;
+  const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RATE });
+  let playhead = 0;          // when the next chunk starts, in ctx time
+  let sources = [];          // scheduled chunks, so "stop" can cut them all
+  let leftover = new Uint8Array(0);  // an odd trailing byte from a chunk boundary
+  const statusEl = document.getElementById("status");
+  window.amberStats = { chunks: 0, seconds: 0, stops: 0, connected: false };  // read by the backend's UI check
+
+  function setSpeaking(on) {
+    document.body.classList.toggle("speaking", on);
+    statusEl.textContent = on ? "Speaking" : "Listening";
+  }
+
+  function play(bytes) {
+    ctx.resume();
+    const joined = new Uint8Array(leftover.length + bytes.length);
+    joined.set(leftover); joined.set(bytes, leftover.length);
+    const usable = joined.length - (joined.length % 2);
+    leftover = joined.slice(usable);
+    if (!usable) return;
+    const pcm = new Int16Array(joined.buffer, 0, usable / 2);
+    const buf = ctx.createBuffer(1, pcm.length, RATE);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    playhead = Math.max(playhead, ctx.currentTime + 0.03);
+    src.start(playhead);
+    playhead += buf.duration;
+    sources.push(src);
+    amberStats.chunks += 1; amberStats.seconds += buf.duration;
+    setSpeaking(true);
+    src.onended = () => {
+      sources = sources.filter((s) => s !== src);
+      if (!sources.length) setSpeaking(false);
+    };
+  }
+
+  function stop() {
+    for (const s of sources) { try { s.stop(); } catch (e) {} }
+    sources = []; leftover = new Uint8Array(0); playhead = 0;
+    amberStats.stops += 1;
+    setSpeaking(false);
+  }
+
+  function connect() {
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${proto}://${location.host}/ws/media?m=${params.get("m")}&token=${params.get("token") || ""}`);
+    ws.binaryType = "arraybuffer";
+    ws.onopen = () => { document.getElementById("offline").textContent = ""; amberStats.connected = true; };
+    ws.onmessage = (e) => {
+      if (typeof e.data !== "string") return play(new Uint8Array(e.data));
+      const msg = JSON.parse(e.data);
+      if (msg.type === "stop") stop();
+      if (msg.type === "hand") document.body.classList.toggle("hand-up", !!msg.on);
+      if (msg.type === "status") statusEl.textContent = msg.text;
+    };
+    ws.onclose = () => {  // backend restarted / tunnel blip: keep trying, Amber stays in the call
+      document.getElementById("offline").textContent = "reconnecting…";
+      setTimeout(connect, 1000);
+    };
+  }
+  connect();
+</script>
+</body>
+</html>
