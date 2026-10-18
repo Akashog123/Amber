@@ -1,0 +1,65 @@
+AMBER RECORDS: procurement log and equipment list
+
+PROCUREMENT
+===========
+PO-1041: Centrifugal pump Grundfos CR-32
+  Also called: main pump, pump order, CR-32
+  Status: Awaiting vendor quote
+  Owner: Rahul
+  Details: Qty 2. Replacement for Line 3 cooling loop. Budget INR 4.2L.
+
+PO-1042: Pump mechanical seal kit
+  Also called: pump seals, seal kit
+  Status: Ordered, ETA 24 Oct
+  Owner: Priya
+  Details: Qty 10. Vendor: FlowServe India. PO raised 2 Oct.
+
+PO-1043: Chiller compressor service contract
+  Also called: chiller service, AMC
+  Status: Contract under review
+  Owner: Ankit
+  Details: Annual maintenance for Chiller #2. Renewal due 1 Nov.
+
+PO-1044: VFD drives 15kW
+  Also called: VFDs, variable frequency drives, drives
+  Status: Delivered
+  Owner: Rahul
+  Details: Qty 4. Delivered 10 Oct, installation pending.
+
+PO-1045: PPE kits
+  Also called: safety kits, PPE
+  Status: Approved, not ordered
+  Owner: Sneha
+  Details: Qty 50. Approved in last week's sync.
+
+PO-1046: Booster pump Grundfos CM-5
+  Also called: booster pump, CM-5, Grundfos booster
+  Status: Ordered, ETA 30 Oct
+  Owner: Priya
+  Details: Qty 1. Pressure booster for the admin block. PO raised 8 Oct.
+
+EQUIPMENT
+=========
+EQ-201: Chiller #2
+  Also called: chiller, chiller two
+  Status: Running, high vibration flagged
+  Owner: Ankit
+  Details: Carrier 30XA. Last serviced 12 Apr.
+
+EQ-202: Boiler B1
+  Also called: boiler
+  Status: Operational
+  Owner: Priya
+  Details: Thermax 2TPH. Next inspection 15 Dec.
+
+EQ-203: Cooling tower CT-1
+  Also called: cooling tower
+  Status: Fan motor replaced
+  Owner: Ankit
+  Details: Fan motor replaced 3 Oct.
+
+EQ-204: Air compressor AC-2
+  Also called: compressor, air compressor
+  Status: Down for maintenance
+  Owner: Sneha
+  Details: Atlas Copco GA30. Waiting on filter kit.

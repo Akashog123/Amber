@@ -1975,11 +1975,17 @@ function MeetActionModal({
 function DeleteDialog({
   title,
   message,
+  consequences,
+  busy = false,
+  error,
   onClose,
   onConfirm,
 }: {
   title: string
   message: string
+  consequences?: string[]
+  busy?: boolean
+  error?: string
   onClose: () => void
   onConfirm: () => void
 }) {
@@ -2009,20 +2015,37 @@ function DeleteDialog({
         <p className="mx-auto mt-2 max-w-sm text-center text-sm leading-6 text-[#6a7690]">
           {message}
         </p>
+        {consequences && consequences.length > 0 && (
+          <ul className="mx-auto mt-5 max-w-md space-y-2 rounded-2xl bg-[#fff6f6] p-4 text-sm leading-5 text-[#7a3a3a]">
+            {consequences.map((line) => (
+              <li key={line} className="flex gap-2">
+                <span aria-hidden="true" className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#d94b4b]" />
+                {line}
+              </li>
+            ))}
+          </ul>
+        )}
+        {error && (
+          <p className="mx-auto mt-4 max-w-md text-center text-sm font-semibold text-[#c94848]" role="alert">
+            {error}
+          </p>
+        )}
         <div className="mt-7 flex justify-center gap-3">
           <button
             className="rounded-full bg-[#eff3fa] px-7 py-3 font-bold"
             type="button"
             onClick={onClose}
+            disabled={busy}
           >
             Cancel
           </button>
           <button
-            className="rounded-full bg-[#d94b4b] px-7 py-3 font-bold text-white hover:bg-[#c53d3d]"
+            className="rounded-full bg-[#d94b4b] px-7 py-3 font-bold text-white hover:bg-[#c53d3d] disabled:opacity-60"
             type="button"
             onClick={onConfirm}
+            disabled={busy}
           >
-            Delete
+            {busy ? "Deleting…" : "Delete"}
           </button>
         </div>
       </div>
@@ -2472,15 +2495,20 @@ function MeetingDetail({
   meetingDate,
   workspaceName,
   onBack,
+  onDelete,
 }: {
   meeting: ScheduledMeet
   meetingDate: Date
   workspaceName: string
   onBack: () => void
+  onDelete?: () => Promise<void>
 }) {
   const [tab, setTab] = useState<"summary" | "people" | "chat" | "tasks" | "outbox">(
     "summary",
   )
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState("")
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [videoMissing, setVideoMissing] = useState(false) // Recall still processing, or recording disabled
   const videoRef = useRef<HTMLDivElement>(null)
@@ -2520,6 +2548,26 @@ function MeetingDetail({
     { id: "tasks" as const, label: "Tasks", icon: ListChecks },
     ...(apiId !== null ? [{ id: "outbox" as const, label: "Outbox", icon: Mail }] : []),
   ]
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`
+  const recordNotes = meeting.review?.recordUpdates?.length ?? 0
+  const deleteConsequences = [
+    "The recording, transcript, chat and minutes are deleted here and at Recall. This can't be undone.",
+    `Amber forgets this meeting: future ${meeting.type} meetings won't see its minutes, decisions or open questions.`,
+    `${plural(tasks.length, "task")} from it ${tasks.length === 1 ? "is" : "are"} removed and their reminders stop.`,
+    `${plural(recordNotes, "note")} it added to records ${recordNotes === 1 ? "is" : "are"} removed.`,
+    "Recap and reminder emails already sent stay in people's inboxes.",
+  ]
+  const confirmDelete = async () => {
+    if (!onDelete) return
+    setDeleting(true)
+    setDeleteError("")
+    try {
+      await onDelete()
+    } catch (e) {
+      setDeleteError((e as Error).message)
+      setDeleting(false)
+    }
+  }
   const taskColors = {
     Completed: "bg-[#e5f5ed] text-[#27815a]",
     "In progress": "bg-[#fff4db] text-[#ad7300]",
@@ -2529,6 +2577,17 @@ function MeetingDetail({
 
   return (
     <div className="fixed inset-0 z-[80] flex h-screen w-screen overflow-hidden bg-[#f4f7fb] text-[#111b3c]">
+      {deleteOpen && (
+        <DeleteDialog
+          title="Delete this meeting?"
+          message={`"${meeting.title}" and everything Amber kept from it will be permanently deleted.`}
+          consequences={deleteConsequences}
+          busy={deleting}
+          error={deleteError}
+          onClose={() => !deleting && setDeleteOpen(false)}
+          onConfirm={() => void confirmDelete()}
+        />
+      )}
       <div className="grid min-h-0 flex-1 grid-rows-[minmax(390px,58vh)_minmax(0,1fr)] overflow-hidden lg:grid-cols-[minmax(0,1fr)_420px] lg:grid-rows-1">
         <section className="flex min-h-0 min-w-0 flex-col p-4 md:p-6">
           <div className="mb-4 rounded-2xl border border-[#dde5f0] bg-white p-4 shadow-[0_8px_24px_rgba(42,61,97,0.05)]">
@@ -2545,6 +2604,18 @@ function MeetingDetail({
               <h2 className="min-w-0 flex-1 truncate text-xl font-extrabold tracking-[-0.025em] md:text-2xl">
                 {meeting.title}
               </h2>
+              {onDelete && (
+                <button
+                  className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[#f1c9c9] px-4 py-2 text-sm font-bold text-[#c94848] transition hover:bg-[#fff0f0]"
+                  type="button"
+                  onClick={() => {
+                    setDeleteError("")
+                    setDeleteOpen(true)
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" /> Delete
+                </button>
+              )}
             </div>
             <div className="mt-4 grid grid-cols-2 gap-x-5 gap-y-3 text-sm sm:grid-cols-3 xl:grid-cols-5">
               {[
@@ -3726,6 +3797,15 @@ function Dashboard() {
                 ?.name ?? "Amber"
             }
             onBack={() => setDetailMeeting(null)}
+            onDelete={
+              detailMeeting.id?.startsWith("api-")
+                ? async () => {
+                    await api.deleteMeeting(Number(detailMeeting.id!.slice(4)))
+                    setDetailMeeting(null)
+                    await loadApiMeetings()
+                  }
+                : undefined
+            }
           />
         ) : liveMeetingId !== null ? (
           <LiveMeeting

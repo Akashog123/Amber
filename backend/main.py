@@ -20,7 +20,7 @@ for _stream in (sys.stdout, sys.stderr):
     _stream.reconfigure(errors="backslashreplace")
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect  # noqa: E402
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 import db  # noqa: E402
@@ -49,17 +49,20 @@ PUBLIC_PATHS = ("/webhooks/", "/ws/", "/media/")  # /media/: the page Recall ren
 SHARE_PUBLIC = os.getenv("SHARE_PUBLIC") == "1"  # demo sharing: opens the unauthenticated operator API to tunnels
 
 
+def tunnelled(headers) -> bool:
+    # cloudflared/ngrok forward from localhost, so the client IP alone can't tell; their forwarding headers can.
+    return any(h in headers for h in ("cf-connecting-ip", "x-forwarded-for", "ngrok-trace-id"))
+
+
 @app.middleware("http")
 async def local_only(request: Request, call_next):
-    # cloudflared/ngrok forward from localhost, so the client IP alone can't tell; their forwarding headers can.
-    forwarded = any(h in request.headers for h in ("cf-connecting-ip", "x-forwarded-for", "ngrok-trace-id"))
-    if forwarded and not SHARE_PUBLIC and not request.url.path.startswith(PUBLIC_PATHS):
+    if tunnelled(request.headers) and not SHARE_PUBLIC and not request.url.path.startswith(PUBLIC_PATHS):
         return JSONResponse({"detail": "The operator API is only available locally."}, status_code=403)
     return await call_next(request)
 PLATFORMS = {"meet.google.com": "google_meet", "zoom.us": "zoom", "teams.microsoft.com": "microsoft_teams",
              "teams.live.com": "microsoft_teams"}
 
-# --- realtime fan-out to the dashboard (SSE) ---------------------------------
+# --- realtime fan-out to the dashboard (WebSocket) ---------------------------------
 # ponytail: in-process queues, single uvicorn worker only; Redis pub/sub if we ever scale
 subscribers: set[asyncio.Queue] = set()
 
@@ -236,6 +239,38 @@ async def stop(mid: int):
     return {"ok": True}
 
 
+# Every table that holds something said or decided in a meeting. Amber's memory of a meet type is built from
+# these (last 3 minutes + open tasks of the series), so removing the rows also removes it from her memory.
+MEETING_TABLES = ("utterances", "chat", "attendees", "participants", "tasks", "record_notes",
+                  "pending_confirmations", "outbox")
+
+
+@app.delete("/api/meetings/{mid}")
+async def delete_meeting(mid: int):
+    """Delete a finished meeting and everything it left behind: here, in Recall, and in the raw logs."""
+    m = db.row("SELECT bot_id, status FROM meetings WHERE id=?", mid) or _404()
+    if m["status"] not in ("completed", "cancelled", "failed"):
+        # A live bot keeps writing rows, and the minutes pass (ended -> processing) would recreate them
+        raise HTTPException(409, "Amber is still in this meeting or writing its minutes. Stop her first.")
+    recording_deleted = None  # None = there was nothing at Recall to delete
+    if bot := _real_bot(mid):
+        try:
+            await recall.delete_media(bot)
+            recording_deleted = True
+        except Exception as e:  # already expired / never recorded: our copy still goes
+            print(f"[delete] recall media {bot}: {e!r}")
+            recording_deleted = False
+    removed = {t: db.execute_count(f"DELETE FROM {t} WHERE meeting_id=?", mid) for t in MEETING_TABLES}
+    db.execute("DELETE FROM meetings WHERE id=?", mid)
+    if m["bot_id"]:
+        with suppress(FileNotFoundError):
+            os.remove(os.path.join(LOG_DIR, f"recall-{m['bot_id']}.jsonl"))
+    for state in (convs, screens, since_extract, extract_locks, voice_locks, engagement_shown):
+        state.pop(mid, None)
+    publish("meeting.status", mid, {"status": "deleted"})  # dashboards refetch their meeting lists
+    return {"ok": True, "removed": removed, "recording_deleted": recording_deleted}
+
+
 @app.get("/api/meetings/{mid}/recording")
 async def recording(mid: int):
     """Recall's download links are pre-signed and expire, so fetch a fresh one each time the video is opened."""
@@ -334,22 +369,27 @@ async def delete_record_note(rid: str, nid: int):
     return {"ok": True}
 
 
-@app.get("/api/events")
-async def events():
+# A WebSocket, not SSE: Cloudflare quick tunnels hold SSE back (live: the shared dashboard got no events during a
+# call until reloaded), while WebSockets pass straight through. The http middleware doesn't see WebSockets, so the
+# same local-only rule is applied here.
+@app.websocket("/api/events")
+async def events(ws: WebSocket):
+    if tunnelled(ws.headers) and not SHARE_PUBLIC:
+        await ws.close(code=1008)
+        return
     q: asyncio.Queue = asyncio.Queue()
-    subscribers.add(q)
-
-    async def stream():
-        try:
-            while True:
-                try:
-                    yield f"data: {json.dumps(await asyncio.wait_for(q.get(), 15))}\n\n"
-                except asyncio.TimeoutError:
-                    yield ": ping\n\n"  # keeps proxies from closing an idle stream
-        finally:
-            subscribers.discard(q)
-
-    return StreamingResponse(stream(), media_type="text/event-stream")
+    subscribers.add(q)  # before accept: nothing published once the dashboard is connected is missed
+    try:
+        await ws.accept()
+        while True:
+            try:
+                await ws.send_json(await asyncio.wait_for(q.get(), 15))
+            except asyncio.TimeoutError:
+                await ws.send_json({"type": "ping"})  # keeps proxies from closing an idle socket
+    except (WebSocketDisconnect, RuntimeError):
+        pass  # the dashboard went away; a send on a closed socket raises
+    finally:
+        subscribers.discard(q)
 
 
 def _404():

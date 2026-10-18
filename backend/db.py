@@ -99,6 +99,12 @@ def execute(sql: str, *args) -> int:
         return c.execute(sql, args).lastrowid
 
 
+def execute_count(sql: str, *args) -> int:
+    """Run an UPDATE/DELETE and return how many rows it touched."""
+    with db() as c:
+        return c.execute(sql, args).rowcount
+
+
 def meeting_detail(meeting_id: int) -> dict | None:
     m = row("SELECT * FROM meetings WHERE id=?", meeting_id)
     if not m:

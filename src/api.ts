@@ -121,6 +121,8 @@ export const api = {
       body: JSON.stringify(body),
     }),
   stop: (id: number) => call<{ ok: boolean }>(`/meetings/${id}/stop`, { method: "POST" }),
+  deleteMeeting: (id: number) =>
+    call<{ ok: boolean; recording_deleted: boolean | null }>(`/meetings/${id}`, { method: "DELETE" }),
   setRecording: (id: number, action: "pause" | "resume") =>
     call<{ paused: boolean }>(`/meetings/${id}/recording/${action}`, { method: "POST" }),
   resendRecap: (id: number) => call<ApiMeetingDetail>(`/meetings/${id}/recap`, { method: "POST" }),
@@ -138,20 +140,35 @@ export const api = {
   outboxItem: (id: number) => call<OutboxItem>(`/outbox/${id}`),
 }
 
-/** Subscribe to the backend's live event stream. The browser's EventSource reconnects on its own. */
+/** Subscribe to the backend's live events. A WebSocket, not EventSource: Cloudflare quick tunnels hold SSE back,
+ * so a shared dashboard never updated. Reconnects every 2 s after a drop, as EventSource did. */
 export function useAmberEvents(onEvent: (event: AmberEvent) => void) {
   const handler = useRef(onEvent)
   handler.current = onEvent
   useEffect(() => {
-    const source = new EventSource("/api/events")
-    source.onmessage = (message) => {
-      try {
-        handler.current(JSON.parse(message.data))
-      } catch {
-        // ignore a malformed frame; the next event triggers a refetch anyway
+    let socket: WebSocket
+    let retry: number | undefined
+    let closed = false
+    const connect = () => {
+      socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/events`)
+      socket.onmessage = (message) => {
+        try {
+          const event = JSON.parse(message.data) as AmberEvent
+          if (event.type !== "ping") handler.current(event)
+        } catch {
+          // ignore a malformed frame; the next event triggers a refetch anyway
+        }
+      }
+      socket.onclose = () => {
+        if (!closed) retry = window.setTimeout(connect, 2000)
       }
     }
-    return () => source.close()
+    connect()
+    return () => {
+      closed = true
+      window.clearTimeout(retry)
+      socket.close()
+    }
   }, [])
 }
 

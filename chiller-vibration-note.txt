@@ -1,0 +1,5 @@
+Chiller #2 vibration inspection, 14 Oct
+Inspected by: Ankit
+Finding: vibration at the compressor bearing is 7.8 mm/s, above the 4.5 mm/s alarm limit.
+Likely cause: worn compressor bearing.
+Recommendation: replace the bearing within two weeks; bring it under the AMC renewal (PO-1043) if possible.

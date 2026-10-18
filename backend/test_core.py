@@ -12,6 +12,7 @@ os.environ["SEED_RECORDS"] = "1"
 os.environ["SHARE_PUBLIC"] = "0"
 
 from fastapi.testclient import TestClient  # noqa: E402
+from starlette.websockets import WebSocketDisconnect  # noqa: E402
 
 import asyncio  # noqa: E402
 import json  # noqa: E402
@@ -311,7 +312,18 @@ assert c.get("/api/meetings", headers={"cf-connecting-ip": "1.2.3.4"}).status_co
 assert c.post("/webhooks/recall?token=t", json={}, headers={"cf-connecting-ip": "1.2.3.4"}).status_code == 200
 main.SHARE_PUBLIC = True  # SHARE_PUBLIC=1: demo link, the operator API opens to the tunnel
 assert c.get("/api/meetings", headers={"cf-connecting-ip": "1.2.3.4"}).status_code == 200
+with c.websocket_connect("/api/events", headers={"cf-connecting-ip": "1.2.3.4"}) as ws:  # live events, shared too
+    was = c.get("/api/records").json()[0]
+    c.patch(f"/api/records/{was['id']}", json={"details": "socket check"})
+    assert ws.receive_json()["data"] == {"record_id": was["id"], "details": "socket check"}
+    c.patch(f"/api/records/{was['id']}", json={"details": was["details"]})
 main.SHARE_PUBLIC = False
+try:  # the live event socket follows the same local-only rule (the http middleware doesn't see WebSockets)
+    with c.websocket_connect("/api/events", headers={"cf-connecting-ip": "1.2.3.4"}) as ws:
+        ws.receive_json()
+    raise AssertionError("tunnelled event socket was accepted")
+except WebSocketDisconnect as e:
+    assert e.code == 1008
 # Owner email: full name wins; an ambiguous first name gets no email rather than the wrong person's.
 with db.db() as conn:
     conn.executemany("INSERT INTO attendees VALUES (?,?,?)", [(D, "Rahul Mehta", "rm@x.com"), (D, "Rahul Shah", "rs@x.com")])
@@ -929,4 +941,41 @@ assert "PO-1044 [procurement] VFD drives 15kW | status: Installed" in brain.buil
 assert main.which_records("the VFDs arrived", {x["id"]: x for x in db.rows("SELECT * FROM records")}) == ["PO-1044"]
 seed.seed()  # runs on every start
 assert db.row("SELECT status FROM records WHERE id='PO-1044'")["status"] == "Installed"
+print("ok")
+
+# Operator deletes a finished meeting: every row it left goes, Recall's copy and the raw log go, and the next
+# meeting of the same meet type no longer remembers it. A meeting Amber is still in can't be deleted.
+S = "ws-del:type"
+mom = json.dumps({"executive_summary": "ZEBRA pump decision", "decisions": ["Buy the ZEBRA pump"], "open_questions": []})
+gone = db.execute("INSERT INTO meetings (series_id,title,status,bot_id,mom_json,created_at) VALUES (?,?,?,?,?,?)",
+                  S, "Old review", "completed", "bot-del-1", mom, db.now())
+nxt = db.execute("INSERT INTO meetings (series_id,title,status,bot_id,created_at) VALUES (?,?,?,?,?)",
+                 S, "Next review", "in_call_recording", "bot-del-2", db.now())
+for sql in ("INSERT INTO utterances (meeting_id,speaker,text) VALUES (?,'Akash','ZEBRA line')",
+            "INSERT INTO chat (meeting_id,sender,text) VALUES (?,'Akash','hi')",
+            "INSERT INTO attendees (meeting_id,name,email) VALUES (?,'Akash','a@x.com')",
+            "INSERT INTO record_notes (record_id,meeting_id,note,ts) VALUES ('PO-1041',?,'ZEBRA note','2026-10-18')",
+            "INSERT INTO outbox (meeting_id,kind,to_addr) VALUES (?,'recap','a@x.com')"):
+    db.execute(sql, gone)
+db.execute("INSERT INTO tasks (meeting_id,series_id,title,status) VALUES (?,?,'Order ZEBRA pump','open')", gone, S)
+os.makedirs(main.LOG_DIR, exist_ok=True)
+log = os.path.join(main.LOG_DIR, "recall-bot-del-1.jsonl")
+open(log, "w").close()
+assert "ZEBRA pump decision" in brain.build_context(nxt) and "Order ZEBRA pump" in brain.build_context(nxt)
+deleted_media, old_enabled, old_delete = [], main.recall.enabled, main.recall.delete_media
+async def fake_delete_media(bot):
+    deleted_media.append(bot)
+main.recall.enabled, main.recall.delete_media = (lambda: True), fake_delete_media
+assert c.delete(f"/api/meetings/{nxt}").status_code == 409  # she's still in that call
+r = c.delete(f"/api/meetings/{gone}").json()
+main.recall.enabled, main.recall.delete_media = old_enabled, old_delete
+assert r["ok"] and r["recording_deleted"] is True and deleted_media == ["bot-del-1"]
+assert r["removed"]["tasks"] == 1 and r["removed"]["record_notes"] == 1 and r["removed"]["utterances"] == 1
+assert not os.path.exists(log)
+for table in main.MEETING_TABLES:
+    assert not db.rows(f"SELECT 1 FROM {table} WHERE meeting_id=?", gone), table
+assert c.get(f"/api/meetings/{gone}").status_code == 404 and c.delete(f"/api/meetings/{gone}").status_code == 404
+ctx = brain.build_context(nxt)
+assert "ZEBRA" not in ctx  # her memory of the meet type no longer has it
+assert db.row("SELECT 1 FROM meetings WHERE id=?", nxt)  # the other meeting is untouched
 print("ok")

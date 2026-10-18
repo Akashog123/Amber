@@ -8,6 +8,6 @@ export default defineConfig({
   resolve: { alias: { '@': path.resolve(__dirname, './src') } },
   server: {
     port: parseInt(process.env.PORT || '5173'),
-    proxy: { '/api': process.env.AMBER_API || 'http://127.0.0.1:8000' },
+    proxy: { '/api': { target: process.env.AMBER_API || 'http://127.0.0.1:8000', ws: true } }, // ws: live events
   },
 })

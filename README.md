@@ -25,7 +25,7 @@ joins, recording playback, "Amber, leave the meeting".
 ## Architecture
 
 ```
-React dashboard ──REST + SSE──► FastAPI (backend/main.py) ── SQLite (db.py, stdlib sqlite3)
+React dashboard ──REST + WS───► FastAPI (backend/main.py) ── SQLite (db.py, stdlib sqlite3)
                                    │
 Recall.ai bot in the meeting ──webhooks / websocket──► /webhooks/recall, /ws/recall
    ▲                               │
@@ -81,7 +81,7 @@ No Recall key? `uv run python replay.py` plays a scripted meeting through the sa
 | A conversation starts with her name, then continues without it until "that's all", 3 lines for other people, or 75 s idle | People drop "Amber" in follow-ups; the earlier fixed 10 s window cut real conversations short. | She can answer a line that wasn't meant for her. Unclear lines go to the model, and `test_golden.py` guards known cases. |
 | Notes are written only when the speaker's own words point at one record | Several records share words (two pump orders); model confidence alone isn't enough to write. | She asks more often (raised hand, then chat). |
 | Off the record is handled by Amber, not by pausing Recall | Pausing Recall also stopped the live transcript, so she went deaf. | Recall's raw recording still contains that stretch. |
-| SQLite, in-process SSE, one uvicorn worker | Nothing to run but the app. | No horizontal scaling. |
+| SQLite, in-process event socket, one uvicorn worker | Nothing to run but the app. | No horizontal scaling. |
 | Fillers only when the answer isn't ready after 1.2 s | A filler before a fast answer only adds delay. | A slow reply still has a short silence first. |
 
 ## Limitations

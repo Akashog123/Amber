@@ -89,6 +89,12 @@ async def delete_bot(bot_id: str):
         (await c.delete(f"/bot/{bot_id}/")).raise_for_status()
 
 
+async def delete_media(bot_id: str):
+    """Permanently delete what Recall stores for a finished bot: recording, transcript, participant data."""
+    async with _client() as c:
+        (await c.post(f"/bot/{bot_id}/delete_media/")).raise_for_status()
+
+
 async def leave(bot_id: str):
     async with _client() as c:
         (await c.post(f"/bot/{bot_id}/leave_call/")).raise_for_status()
