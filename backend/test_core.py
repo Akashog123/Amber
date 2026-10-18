@@ -7,6 +7,9 @@ os.environ["AMBER_DB"] = os.path.join(tempfile.mkdtemp(), "test.db")
 for k in ("RECALL_API_KEY", "ELEVENLABS_API_KEY", "GEMINI_API_KEY", "LLM_BASE_URL", "RECALL_TRANSCRIBER", "SMTP_USER", "AMBER_DEMO_REMINDER_MINUTES"):
     os.environ[k] = ""
 os.environ["WEBHOOK_TOKEN"] = "t"
+# Pin the demo-sharing flags: the tests expect the mock records and the local-only operator API, whatever .env says.
+os.environ["SEED_RECORDS"] = "1"
+os.environ["SHARE_PUBLIC"] = "0"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -306,6 +309,9 @@ assert c.post("/api/meetings/dispatch", json={"title": "x", "url": "https://meet
 # Operator API isn't reachable through the public tunnel; Recall's webhook is.
 assert c.get("/api/meetings", headers={"cf-connecting-ip": "1.2.3.4"}).status_code == 403
 assert c.post("/webhooks/recall?token=t", json={}, headers={"cf-connecting-ip": "1.2.3.4"}).status_code == 200
+main.SHARE_PUBLIC = True  # SHARE_PUBLIC=1: demo link, the operator API opens to the tunnel
+assert c.get("/api/meetings", headers={"cf-connecting-ip": "1.2.3.4"}).status_code == 200
+main.SHARE_PUBLIC = False
 # Owner email: full name wins; an ambiguous first name gets no email rather than the wrong person's.
 with db.db() as conn:
     conn.executemany("INSERT INTO attendees VALUES (?,?,?)", [(D, "Rahul Mehta", "rm@x.com"), (D, "Rahul Shah", "rs@x.com")])
@@ -895,4 +901,29 @@ say(en["bot_id"], "Akash", "okay that's all")
 time.sleep(0.4)
 assert not main.conv(en["id"]).joined and replies(en["id"])[0][-1] == "Okay, I'll wait for my name again."
 main.FOLLOWUP, brain.is_for_amber = old_followup, real_judge
+
+# Operator fixes or drops a record note; Amber's context reads the corrected memory.
+nid = db.row("SELECT id FROM record_notes WHERE record_id='PO-1043' AND meeting_id=?", E)["id"]
+assert c.patch(f"/api/records/PO-1043/notes/{nid}", json={"note": "  "}).status_code == 422
+assert c.patch(f"/api/records/PO-1043/notes/{nid}", json={"note": "x" * 2001}).status_code == 422
+assert c.patch(f"/api/records/PO-1041/notes/{nid}", json={"note": "x"}).status_code == 404  # wrong record
+same = c.patch(f"/api/records/PO-1043/notes/{nid}", json={"note": "Renewal approved"}).json()
+assert not same["edited_at"]  # unchanged text is not an edit
+edited = c.patch(f"/api/records/PO-1043/notes/{nid}", json={"note": " Renewal approved till 2027 "}).json()
+assert edited["note"] == "Renewal approved till 2027" and edited["edited_at"]
+assert "Renewal approved till 2027" in brain.build_context(E)
+assert c.delete(f"/api/records/PO-1043/notes/{nid}").json() == {"ok": True}
+assert c.delete(f"/api/records/PO-1043/notes/{nid}").status_code == 404
+assert "Renewal approved till 2027" not in brain.build_context(E)
+
+# Operator edits a record's own fields; Amber's context and speech matching use them, and a restart keeps them.
+assert c.patch("/api/records/PO-1044", json={"name": " "}).status_code == 422
+assert c.patch("/api/records/PO-1044", json={"details": "x" * 2001}).status_code == 422
+assert c.patch("/api/records/PO-9999", json={"status": "x"}).status_code == 404
+rec = c.patch("/api/records/PO-1044", json={"status": "Installed", "aliases": " drives ,, VFDs ,"}).json()
+assert (rec["status"], rec["aliases"], rec["id"]) == ("Installed", "drives, VFDs", "PO-1044")
+assert "PO-1044 [procurement] VFD drives 15kW | status: Installed" in brain.build_context(E)
+assert main.which_records("the VFDs arrived", {x["id"]: x for x in db.rows("SELECT * FROM records")}) == ["PO-1044"]
+seed.seed()  # runs on every start
+assert db.row("SELECT status FROM records WHERE id='PO-1044'")["status"] == "Installed"
 print("ok")

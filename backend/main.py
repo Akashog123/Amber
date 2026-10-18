@@ -41,18 +41,19 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Amber Live", lifespan=lifespan)
-seed.seed()  # creates tables + mock records; idempotent
+seed.seed() if os.getenv("SEED_RECORDS", "1") == "1" else db.init()  # tables + mock records (0 = tables only)
 WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN", "")
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 # The public tunnel exists for Recall's webhooks only; the operator API stays local (the dashboard proxies to it).
 PUBLIC_PATHS = ("/webhooks/", "/ws/", "/media/")  # /media/: the page Recall renders as Amber's camera + voice
+SHARE_PUBLIC = os.getenv("SHARE_PUBLIC") == "1"  # demo sharing: opens the unauthenticated operator API to tunnels
 
 
 @app.middleware("http")
 async def local_only(request: Request, call_next):
     # cloudflared/ngrok forward from localhost, so the client IP alone can't tell; their forwarding headers can.
     forwarded = any(h in request.headers for h in ("cf-connecting-ip", "x-forwarded-for", "ngrok-trace-id"))
-    if forwarded and not request.url.path.startswith(PUBLIC_PATHS):
+    if forwarded and not SHARE_PUBLIC and not request.url.path.startswith(PUBLIC_PATHS):
         return JSONResponse({"detail": "The operator API is only available locally."}, status_code=403)
     return await call_next(request)
 PLATFORMS = {"meet.google.com": "google_meet", "zoom.us": "zoom", "teams.microsoft.com": "microsoft_teams",
@@ -261,6 +262,76 @@ async def list_records():
     for r in recs:
         r["notes"] = [n for n in notes if n["record_id"] == r["id"]]
     return recs
+
+
+class RecordEdit(BaseModel):
+    name: str | None = None
+    aliases: str | None = None
+    status: str | None = None
+    owner: str | None = None
+    details: str | None = None
+
+
+# field -> (max length, may be blank). The id stays fixed: notes and meeting history point at it.
+RECORD_FIELDS = {"name": (200, False), "aliases": (500, True), "status": (200, False),
+                 "owner": (100, True), "details": (2000, True)}
+
+
+@app.patch("/api/records/{rid}")
+async def edit_record(rid: str, body: RecordEdit):
+    r = db.row("SELECT * FROM records WHERE id=?", rid) or _404()
+    changes = {}
+    for field, value in body.model_dump(exclude_none=True).items():
+        limit, blank_ok = RECORD_FIELDS[field]
+        value = value.strip()
+        if field == "aliases":  # "main pump ,  CR-32," -> "main pump, CR-32" (matched phrase by phrase)
+            value = ", ".join(a.strip() for a in value.split(",") if a.strip())
+        if not value and not blank_ok:
+            raise HTTPException(422, f"{field.capitalize()} can't be empty.")
+        if len(value) > limit:
+            raise HTTPException(422, f"Keep {field} under {limit} characters.")
+        if value != r[field]:
+            changes[field] = value
+    if changes:
+        db.execute(f"UPDATE records SET {', '.join(f'{k}=?' for k in changes)} WHERE id=?", *changes.values(), rid)
+        publish("record.updated", None, {"record_id": rid, **changes})
+    return db.row("SELECT * FROM records WHERE id=?", rid)
+
+
+class NoteEdit(BaseModel):
+    note: str
+
+
+NOTE_MAX = 2000
+
+
+def _record_note(rid: str, nid: int) -> dict:
+    # Scoped to the record, so a stale page can't edit a note through the wrong record.
+    return db.row("SELECT * FROM record_notes WHERE id=? AND record_id=?", nid, rid) or _404()
+
+
+# Notes are Amber's memory of each record (every later meeting's context reads them), so the operator can fix or
+# drop a wrong one. Record status is not rolled back: it's current state, not derived from the notes.
+@app.patch("/api/records/{rid}/notes/{nid}")
+async def edit_record_note(rid: str, nid: int, body: NoteEdit):
+    n = _record_note(rid, nid)
+    text = body.note.strip()
+    if not text:
+        raise HTTPException(422, "A note can't be empty. Delete it instead.")
+    if len(text) > NOTE_MAX:
+        raise HTTPException(422, f"Keep the note under {NOTE_MAX} characters.")
+    if text != n["note"]:
+        db.execute("UPDATE record_notes SET note=?, edited_at=? WHERE id=?", text, db.now(), nid)
+        publish("record.note_edited", n["meeting_id"], {"record_id": rid, "id": nid, "note": text})
+    return db.row("SELECT * FROM record_notes WHERE id=?", nid)
+
+
+@app.delete("/api/records/{rid}/notes/{nid}")
+async def delete_record_note(rid: str, nid: int):
+    n = _record_note(rid, nid)
+    db.execute("DELETE FROM record_notes WHERE id=?", nid)
+    publish("record.note_deleted", n["meeting_id"], {"record_id": rid, "id": nid})
+    return {"ok": True}
 
 
 @app.get("/api/events")

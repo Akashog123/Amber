@@ -51,6 +51,8 @@ def recording_config(webhook_url: str, keyterms: list[str], ws_url: str | None =
         "participant_events": {},
         "realtime_endpoints": [{"type": "webhook", "url": webhook_url, "events": EVENTS}],
     }
+    if os.getenv("AMBER_RECORD_SELF") == "1":  # her own voice in the recording: proves Recall hears what she says
+        cfg["include_bot_in_recording"] = {"audio": True}
     if ws_url:  # screen-share frames (2 fps PNG, every video stream) only go to websockets
         cfg["video_mixed_layout"] = "gallery_view_v2"
         cfg["video_separate_png"] = {}

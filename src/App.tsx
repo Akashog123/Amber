@@ -11,7 +11,7 @@ import {
   type ApiMeeting,
 } from "./api"
 import LiveMeeting from "./components/LiveMeeting"
-import { OutboxPage, RecordsPage } from "./components/DataPages"
+import { MeetingOutbox, RecordsPage } from "./components/DataPages"
 import type { ScheduledMeet } from "./types"
 import {
   ArrowLeft,
@@ -26,6 +26,7 @@ import {
   FileCheck2,
   ExternalLink,
   ListChecks,
+  Mail,
   Maximize2,
   Menu,
   MessageSquareText,
@@ -1248,7 +1249,7 @@ function ScheduleMeetModal({
       }}
     >
       <div
-        className="flex max-h-[88vh] w-full max-w-[680px] flex-col overflow-hidden rounded-[26px] bg-white shadow-[0_28px_90px_rgba(12,26,58,0.3)]"
+        className="flex max-h-[92vh] w-full max-w-[1080px] flex-col overflow-hidden rounded-[26px] bg-white shadow-[0_28px_90px_rgba(12,26,58,0.3)]"
         role="dialog"
         aria-modal="true"
         aria-labelledby="schedule-title"
@@ -1275,6 +1276,7 @@ function ScheduleMeetModal({
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-6 sm:px-8">
+          <div className="grid gap-x-8 gap-y-5 lg:grid-cols-2">
           <div className="space-y-5">
             <div>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -1366,10 +1368,12 @@ function ScheduleMeetModal({
                 placeholder={"Rahul Mehta, rahul@company.com\nPriya, priya@company.com"}
               />
             </label>
+          </div>
 
+          <div className="space-y-5">
             <div>
               <span className="text-sm font-bold text-[#34415d]">Repeat</span>
-              <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5">
+              <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-3">
                 {(Object.keys(
                   recurrenceLabels,
                 ) as ScheduleDraft["recurrence"][]).map((option) => (
@@ -1510,6 +1514,7 @@ function ScheduleMeetModal({
                 </p>
               </div>
             </div>
+          </div>
           </div>
         </div>
         <div className="flex justify-end gap-3 border-t border-[#e7ecf4] px-6 py-4 sm:px-8">
@@ -2037,19 +2042,28 @@ const parseAttendees = (text: string) =>
     })
 
 function QuickJoinCard({
-  workspace,
-  category,
+  workspaces,
+  initialWorkspaceId,
+  initialCategoryId,
   onDispatched,
+  onClose,
 }: {
-  workspace?: Workspace
-  category?: {
-    id: string
-    name: string
-    agenda?: string
-  }
+  workspaces: Workspace[]
+  initialWorkspaceId: string
+  initialCategoryId: string
   onDispatched: (meetingId: number) => void
+  onClose: () => void
 }) {
   const fileInput = useRef<HTMLInputElement>(null)
+  const defaultWorkspaceId = initialWorkspaceId || workspaces[0]?.id || ""
+  const [workspaceId, setWorkspaceId] = useState(defaultWorkspaceId)
+  const [categoryId, setCategoryId] = useState(
+    initialCategoryId ||
+      workspaces.find(({ id }) => id === defaultWorkspaceId)?.categories[0]?.id ||
+      "",
+  )
+  const workspace = workspaces.find(({ id }) => id === workspaceId)
+  const category = workspace?.categories.find(({ id }) => id === categoryId)
   const [meetName, setMeetName] = useState("")
   const [meetLink, setMeetLink] = useState("")
   const [attendees, setAttendees] = useState("")
@@ -2121,245 +2135,278 @@ function QuickJoinCard({
   }
 
   return (
-    <section className="overflow-hidden rounded-[24px] border border-[#dce5f2] bg-white shadow-[0_12px_32px_rgba(43,67,114,0.06)]">
-      <div className="border-b border-[#e8edf5] bg-gradient-to-r from-[#f7faff] to-white p-5 md:p-6">
-        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-[#111b3c]/55 px-4 py-8 backdrop-blur-[2px]"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <div
+        className="flex max-h-[92vh] w-full max-w-[1080px] flex-col overflow-hidden rounded-[26px] bg-white shadow-[0_28px_90px_rgba(12,26,58,0.3)]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="join-title"
+      >
+        <div className="flex shrink-0 items-start justify-between gap-5 border-b border-[#e7ecf4] px-6 pb-5 pt-7 sm:px-8">
           <div className="flex items-center gap-3">
-            <span
-              className="grid h-14 w-12 shrink-0 place-items-end overflow-hidden"
-              aria-hidden="true"
-            >
-              <img
-                className="amber-join-peek h-14 w-auto object-contain"
-                src="/assets/amber-bot-peek.svg"
-                alt=""
-              />
+            <span className="grid h-14 w-12 shrink-0 place-items-end overflow-hidden" aria-hidden="true">
+              <img className="amber-join-peek h-14 w-auto object-contain" src="/assets/amber-bot-peek.svg" alt="" />
             </span>
             <div>
-              <h2 className="text-xl font-extrabold tracking-[-0.025em]">
-                Amber join meet.
+              <h2 id="join-title" className="text-2xl font-extrabold tracking-[-0.03em]">
+                Amber join meet
               </h2>
-              <p className="mt-1 text-sm text-[#758199]">
-                Add a Google Meet, Zoom, or Microsoft Teams link and Amber will
-                join right now.
+              <p className="mt-1.5 text-sm text-[#6a7690]">
+                Paste a Google Meet, Zoom, or Teams link. Amber joins right now.
               </p>
             </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {workspace && (
-              <span className="inline-flex items-center rounded-full bg-white px-3 py-1.5 text-xs font-bold text-[#53617a] shadow-sm">
-                {workspace.name}
-              </span>
-            )}
-            {category && (
-              <span className="inline-flex items-center rounded-full bg-[#eaf2ff] px-3 py-1.5 text-xs font-bold text-[#4974ce]">
-                {category.name}
-              </span>
-            )}
-            {(!workspace || !category) && (
-              <span className="rounded-full bg-[#fff1f1] px-3 py-1.5 text-xs font-bold text-[#c04d4d]">
-                Select a workspace and Meet type
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="p-5 md:p-6">
-        <div className="grid gap-4 md:grid-cols-2">
-          <label>
-            <span className="mb-2 block text-sm font-bold text-[#34415d]">
-              Meet name
-            </span>
-            <input
-              className="w-full rounded-xl border border-[#cbd6e6] px-4 py-3.5 outline-none placeholder:text-[#8792a8] focus:border-[#3479f5] focus:ring-4 focus:ring-[#3479f5]/10"
-              value={meetName}
-              onChange={(event) => {
-                setMeetName(event.target.value)
-                setMessage("")
-              }}
-              placeholder="e.g. Client check-in"
-            />
-          </label>
-          <label>
-            <span className="mb-2 block text-sm font-bold text-[#34415d]">
-              Meeting link
-            </span>
-            <input
-              className="w-full rounded-xl border border-[#cbd6e6] px-4 py-3.5 outline-none placeholder:text-[#8792a8] focus:border-[#3479f5] focus:ring-4 focus:ring-[#3479f5]/10"
-              type="url"
-              value={meetLink}
-              onChange={(event) => {
-                setMeetLink(event.target.value)
-                setMessage("")
-              }}
-              placeholder="Google Meet, Zoom, or Microsoft Teams link"
-            />
-          </label>
+          <button className="rounded-full p-2 hover:bg-[#f0f4fa]" type="button" onClick={onClose} aria-label="Close">
+            <X className="h-5 w-5" />
+          </button>
         </div>
 
-        <label className="mt-4 block">
-          <span className="mb-2 block text-sm font-bold text-[#34415d]">
-            Attendees{" "}
-            <span className="font-normal text-[#8792a8]">
-              (one per line: Name, email — they get the recap and task reminders)
-            </span>
-          </span>
-          <textarea
-            className="h-24 w-full resize-y rounded-xl border border-[#cbd6e6] px-4 py-3 outline-none placeholder:text-[#8792a8] focus:border-[#3479f5] focus:ring-4 focus:ring-[#3479f5]/10"
-            value={attendees}
-            onChange={(event) => setAttendees(event.target.value)}
-            placeholder={"Rahul Mehta, rahul@company.com\nPriya, priya@company.com"}
-          />
-        </label>
-
-        <div className="mt-5 rounded-2xl border border-[#d7dfeb] p-4">
-          <div className="flex items-center justify-between gap-3">
-            <span>
-              <span className="block text-sm font-bold">
-                Meet context{" "}
-                <span className="font-normal text-[#8792a8]">(optional)</span>
-              </span>
-              <span className="mt-0.5 block text-xs text-[#8792a8]">
-                Choose writing or one document.
-              </span>
-            </span>
-            <div className="flex rounded-full bg-[#eef2f8] p-1 text-xs font-semibold">
-              <button
-                className={`rounded-full px-3 py-1.5 ${
-                  mode === "write"
-                    ? "bg-white text-[#3479f5] shadow-sm"
-                    : "text-[#68758f]"
-                } disabled:cursor-not-allowed disabled:opacity-40`}
-                type="button"
-                onClick={() => setMode("write")}
-                disabled={hasUploadedContext}
-              >
-                Write
-              </button>
-              <button
-                className={`rounded-full px-3 py-1.5 ${
-                  mode === "upload"
-                    ? "bg-white text-[#3479f5] shadow-sm"
-                    : "text-[#68758f]"
-                } disabled:cursor-not-allowed disabled:opacity-40`}
-                type="button"
-                onClick={() => setMode("upload")}
-                disabled={hasWrittenContext}
-              >
-                Upload
-              </button>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-6 sm:px-8">
+          <div className="grid gap-6 lg:grid-cols-2">
+          <div className="space-y-5">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label>
+                <span className="mb-2 block text-sm font-bold text-[#34415d]">Workspace</span>
+                <select
+                  className="w-full rounded-xl border border-[#cbd6e6] bg-white px-4 py-3.5 outline-none focus:border-[#3479f5]"
+                  value={workspaceId}
+                  disabled={workspaces.length === 0}
+                  onChange={(event) => {
+                    const next = event.target.value
+                    setWorkspaceId(next)
+                    setCategoryId(workspaces.find(({ id }) => id === next)?.categories[0]?.id ?? "")
+                    setMessage("")
+                  }}
+                >
+                  <option value="" disabled>
+                    {workspaces.length ? "Select a workspace" : "No workspaces yet"}
+                  </option>
+                  {workspaces.map((w) => (
+                    <option key={w.id} value={w.id}>{w.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="mb-2 block text-sm font-bold text-[#34415d]">Meet type</span>
+                <select
+                  className="w-full rounded-xl border border-[#cbd6e6] bg-white px-4 py-3.5 outline-none focus:border-[#3479f5]"
+                  value={categoryId}
+                  disabled={!workspace?.categories.length}
+                  onChange={(event) => {
+                    setCategoryId(event.target.value)
+                    setMessage("")
+                  }}
+                >
+                  <option value="" disabled>
+                    {workspace?.categories.length
+                      ? "Select a meet type"
+                      : workspace
+                        ? "No meet types yet"
+                        : "Pick a workspace first"}
+                  </option>
+                  {workspace?.categories.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </label>
             </div>
-          </div>
-          {mode === "write" ? (
-            <div className="relative mt-3 h-[260px] overflow-hidden rounded-xl border border-[#d7dfeb] bg-[#f8fafd] focus-within:border-[#3479f5] focus-within:ring-4 focus-within:ring-[#3479f5]/10">
-              <textarea
-                className="h-full w-full resize-none bg-transparent px-4 pb-14 pt-4 outline-none placeholder:text-[#8a95a9]"
-                value={context}
-                onChange={(event) => setContext(event.target.value)}
-                placeholder="Agenda, goals, or notes for Amber..."
+
+            <label className="block">
+              <span className="text-sm font-bold text-[#34415d]">Meet name</span>
+              <input
+                className="mt-2 w-full rounded-xl border border-[#cbd6e6] px-4 py-3.5 outline-none placeholder:text-[#8792a8] focus:border-[#3479f5] focus:ring-4 focus:ring-[#3479f5]/10"
+                value={meetName}
+                onChange={(event) => {
+                  setMeetName(event.target.value)
+                  setMessage("")
+                }}
+                placeholder="e.g. Client check-in"
+                autoFocus
               />
-              <div className="absolute bottom-0 left-4 right-4 flex h-12 items-center border-t border-[#e4e9f1] bg-[#f8fafd]">
-                {hasWrittenContext && (
+            </label>
+            <label className="block">
+              <span className="text-sm font-bold text-[#34415d]">Meeting link</span>
+              <input
+                className="mt-2 w-full rounded-xl border border-[#cbd6e6] px-4 py-3.5 outline-none placeholder:text-[#8792a8] focus:border-[#3479f5] focus:ring-4 focus:ring-[#3479f5]/10"
+                type="url"
+                value={meetLink}
+                onChange={(event) => {
+                  setMeetLink(event.target.value)
+                  setMessage("")
+                }}
+                placeholder="Google Meet, Zoom, or Microsoft Teams link"
+              />
+            </label>
+            <label className="block">
+              <span className="text-sm font-bold text-[#34415d]">Attendees</span>
+              <span className="ml-2 text-xs text-[#8792a8]">one per line: Name, email (for the recap and reminders)</span>
+              <textarea
+                className="mt-2 h-20 resize-none w-full rounded-xl border border-[#cbd6e6] px-4 py-3.5 outline-none placeholder:text-[#8792a8] focus:border-[#3479f5] focus:ring-4 focus:ring-[#3479f5]/10"
+                value={attendees}
+                onChange={(event) => setAttendees(event.target.value)}
+                placeholder={"Rahul Mehta, rahul@company.com\nPriya, priya@company.com"}
+              />
+            </label>
+          </div>
+
+            <div className="flex flex-col rounded-2xl border border-[#d7dfeb] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <span>
+                  <span className="block text-sm font-bold">
+                    Meet context{" "}
+                    <span className="font-normal text-[#8792a8]">(optional)</span>
+                  </span>
+                  <span className="mt-0.5 block text-xs text-[#8792a8]">
+                    Choose writing or one document.
+                  </span>
+                </span>
+                <div className="flex rounded-full bg-[#eef2f8] p-1 text-xs font-semibold">
                   <button
-                    className="text-xs font-bold text-[#bd4545] hover:underline"
+                    className={`rounded-full px-3 py-1.5 ${
+                      mode === "write"
+                        ? "bg-white text-[#3479f5] shadow-sm"
+                        : "text-[#68758f]"
+                    } disabled:cursor-not-allowed disabled:opacity-40`}
                     type="button"
-                    onClick={() => setContext("")}
+                    onClick={() => setMode("write")}
+                    disabled={hasUploadedContext}
                   >
-                    Clear to upload instead
+                    Write
                   </button>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div
-              className={`mt-3 h-[260px] overflow-hidden rounded-xl border text-center ${
-                dragging
-                  ? "border-[#3479f5] bg-[#f5f8ff]"
-                  : fileName
-                    ? "border-[#d8e1ee] bg-white"
-                    : "border-dashed border-[#cbd6e6] bg-[#fbfcfe]"
-              }`}
-              onDragEnter={(event) => {
-                event.preventDefault()
-                setDragging(true)
-              }}
-              onDragOver={(event) => event.preventDefault()}
-              onDragLeave={() => setDragging(false)}
-              onDrop={(event) => {
-                event.preventDefault()
-                setDragging(false)
-                void acceptFile(event.dataTransfer.files[0])
-              }}
-            >
-              {fileName ? (
-                fileName.toLowerCase().endsWith(".pdf") ? (
-                  <PdfPreview
-                    fileId={fileId}
-                    name={fileName}
-                    onRemove={() => {
-                      setFileName("")
-                      setFileId(undefined)
-                      setFileSize(undefined)
-                      setFileType(undefined)
-                    }}
-                  />
-                ) : (
-                  <div className="p-4">
-                    <UploadedDocument
-                      name={fileName}
-                      fileId={fileId}
-                      size={fileSize}
-                      type={fileType}
-                      onRemove={() => {
-                        setFileName("")
-                        setFileId(undefined)
-                        setFileSize(undefined)
-                        setFileType(undefined)
-                      }}
-                    />
-                  </div>
-                )
-              ) : (
-                <div className="flex h-full flex-col items-center justify-center p-4">
-                  <Upload className="mx-auto mb-2 h-6 w-6 text-[#3479f5]" />
-                  <p className="text-sm font-semibold">
-                    Drop PDF, DOC, DOCX, or TXT here
-                  </p>
-                  <p className="mt-1 text-xs text-[#8390a6]">
-                    Maximum file size: 10 MB
-                  </p>
                   <button
-                    className="mt-3 text-sm font-bold text-[#3479f5]"
+                    className={`rounded-full px-3 py-1.5 ${
+                      mode === "upload"
+                        ? "bg-white text-[#3479f5] shadow-sm"
+                        : "text-[#68758f]"
+                    } disabled:cursor-not-allowed disabled:opacity-40`}
                     type="button"
-                    onClick={() => fileInput.current?.click()}
+                    onClick={() => setMode("upload")}
+                    disabled={hasWrittenContext}
                   >
-                    Choose file
+                    Upload
                   </button>
                 </div>
+              </div>
+              {mode === "write" ? (
+                <div className="relative mt-3 h-[200px] lg:h-auto lg:min-h-[200px] lg:flex-1 overflow-hidden rounded-xl border border-[#d7dfeb] bg-[#f8fafd] focus-within:border-[#3479f5] focus-within:ring-4 focus-within:ring-[#3479f5]/10">
+                  <textarea
+                    className="h-full w-full resize-none bg-transparent px-4 pb-14 pt-4 outline-none placeholder:text-[#8a95a9]"
+                    value={context}
+                    onChange={(event) => setContext(event.target.value)}
+                    placeholder="Agenda, goals, or notes for Amber..."
+                  />
+                  <div className="absolute bottom-0 left-4 right-4 flex h-12 items-center border-t border-[#e4e9f1] bg-[#f8fafd]">
+                    {hasWrittenContext && (
+                      <button
+                        className="text-xs font-bold text-[#bd4545] hover:underline"
+                        type="button"
+                        onClick={() => setContext("")}
+                      >
+                        Clear to upload instead
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className={`mt-3 h-[200px] lg:h-auto lg:min-h-[200px] lg:flex-1 overflow-hidden rounded-xl border text-center ${
+                    dragging
+                      ? "border-[#3479f5] bg-[#f5f8ff]"
+                      : fileName
+                        ? "border-[#d8e1ee] bg-white"
+                        : "border-dashed border-[#cbd6e6] bg-[#fbfcfe]"
+                  }`}
+                  onDragEnter={(event) => {
+                    event.preventDefault()
+                    setDragging(true)
+                  }}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDragLeave={() => setDragging(false)}
+                  onDrop={(event) => {
+                    event.preventDefault()
+                    setDragging(false)
+                    void acceptFile(event.dataTransfer.files[0])
+                  }}
+                >
+                  {fileName ? (
+                    fileName.toLowerCase().endsWith(".pdf") ? (
+                      <PdfPreview
+                        fileId={fileId}
+                        name={fileName}
+                        onRemove={() => {
+                          setFileName("")
+                          setFileId(undefined)
+                          setFileSize(undefined)
+                          setFileType(undefined)
+                        }}
+                      />
+                    ) : (
+                      <div className="p-4">
+                        <UploadedDocument
+                          name={fileName}
+                          fileId={fileId}
+                          size={fileSize}
+                          type={fileType}
+                          onRemove={() => {
+                            setFileName("")
+                            setFileId(undefined)
+                            setFileSize(undefined)
+                            setFileType(undefined)
+                          }}
+                        />
+                      </div>
+                    )
+                  ) : (
+                    <div className="flex h-full flex-col items-center justify-center p-4">
+                      <Upload className="mx-auto mb-2 h-6 w-6 text-[#3479f5]" />
+                      <p className="text-sm font-semibold">
+                        Drop PDF, DOC, DOCX, or TXT here
+                      </p>
+                      <p className="mt-1 text-xs text-[#8390a6]">
+                        Maximum file size: 10 MB
+                      </p>
+                      <button
+                        className="mt-3 text-sm font-bold text-[#3479f5]"
+                        type="button"
+                        onClick={() => fileInput.current?.click()}
+                      >
+                        Choose file
+                      </button>
+                    </div>
+                  )}
+                  <input
+                    ref={fileInput}
+                    className="hidden"
+                    type="file"
+                    accept=".pdf,.doc,.docx,.txt"
+                    onChange={(event) => void acceptFile(event.target.files?.[0])}
+                  />
+                </div>
               )}
-              <input
-                ref={fileInput}
-                className="hidden"
-                type="file"
-                accept=".pdf,.doc,.docx,.txt"
-                onChange={(event) => void acceptFile(event.target.files?.[0])}
-              />
             </div>
-          )}
+          </div>
         </div>
 
-        <div className="mt-4 flex flex-col-reverse items-start justify-between gap-3 sm:flex-row sm:items-center">
+        <div className="flex shrink-0 flex-col-reverse items-stretch gap-3 border-t border-[#e7ecf4] px-6 py-4 sm:flex-row sm:items-center sm:px-8">
           <p
-            className={`text-sm font-semibold ${
+            className={`min-w-0 flex-1 text-sm font-semibold ${
               message.startsWith("Sent") ? "text-[#27815a]" : "text-[#c94848]"
             }`}
             role="status"
           >
             {message}
           </p>
+          <button className="rounded-full bg-[#eff3fa] px-7 py-3 font-bold" type="button" onClick={onClose}>
+            Cancel
+          </button>
           <button
-            className="flex w-full items-center justify-center gap-2 rounded-full bg-[#3479f5] px-7 py-3 font-bold text-white hover:bg-[#2068e7] disabled:cursor-not-allowed disabled:opacity-45 sm:w-auto"
+            className="flex items-center justify-center gap-2 rounded-full bg-[#3479f5] px-7 py-3 font-bold text-white hover:bg-[#2068e7] disabled:cursor-not-allowed disabled:opacity-50"
             type="button"
             onClick={() => void join()}
             disabled={!canJoin || sending}
@@ -2368,7 +2415,7 @@ function QuickJoinCard({
           </button>
         </div>
       </div>
-    </section>
+    </div>
   )
 }
 
@@ -2431,7 +2478,7 @@ function MeetingDetail({
   workspaceName: string
   onBack: () => void
 }) {
-  const [tab, setTab] = useState<"summary" | "people" | "chat" | "tasks">(
+  const [tab, setTab] = useState<"summary" | "people" | "chat" | "tasks" | "outbox">(
     "summary",
   )
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -2440,6 +2487,7 @@ function MeetingDetail({
   const people = meeting.review?.participants ?? []
   const tasks = meeting.review?.tasks ?? []
   const chat = meeting.review?.chat ?? []
+  const apiId = meeting.id?.startsWith("api-") ? Number(meeting.id.slice(4)) : null
   const formattedDate = meetingDate.toLocaleDateString("en-US", {
     weekday: "short",
     month: "short",
@@ -2470,6 +2518,7 @@ function MeetingDetail({
     },
     { id: "chat" as const, label: "Chat", icon: MessageSquareText },
     { id: "tasks" as const, label: "Tasks", icon: ListChecks },
+    ...(apiId !== null ? [{ id: "outbox" as const, label: "Outbox", icon: Mail }] : []),
   ]
   const taskColors = {
     Completed: "bg-[#e5f5ed] text-[#27815a]",
@@ -2562,7 +2611,7 @@ function MeetingDetail({
         </section>
 
         <aside className="flex min-h-0 flex-col border-t border-[#dce4ef] bg-white shadow-[-8px_0_28px_rgba(42,61,97,0.06)] lg:border-l lg:border-t-0">
-          <div className="grid grid-cols-4 border-b border-[#e6ebf2] px-2">
+          <div className={`grid border-b border-[#e6ebf2] px-2 ${tabs.length === 5 ? "grid-cols-5" : "grid-cols-4"}`}>
             {tabs.map(({ id, label, icon: Icon, count }) => (
               <button
                 key={id}
@@ -2862,6 +2911,18 @@ function MeetingDetail({
                 </div>
               </div>
             )}
+
+            {tab === "outbox" && apiId !== null && (
+              <div>
+                <div className="border-b border-[#e8edf4] pb-4">
+                  <h3 className="text-xl font-extrabold tracking-[-0.025em]">Outbox</h3>
+                  <p className="mt-1 text-sm text-[#7a869b]">Follow-ups Amber sent for this Meet, and to whom.</p>
+                </div>
+                <div className="mt-4">
+                  <MeetingOutbox meetingId={apiId} />
+                </div>
+              </div>
+            )}
           </div>
         </aside>
       </div>
@@ -3065,6 +3126,7 @@ function Dashboard() {
   const [profileOpen, setProfileOpen] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false)
+  const [joinModalOpen, setJoinModalOpen] = useState(false)
   const [schedulePreset, setSchedulePreset] = useState<ScheduledMeet | null>(
     null,
   )
@@ -3158,7 +3220,7 @@ function Dashboard() {
   })
   // Backend meetings (dispatched Amber sessions) merged into the calendar's date-keyed map.
   const [apiMeetings, setApiMeetings] = useState<ApiMeeting[]>([])
-  const [view, setView] = useState<"meetings" | "records" | "outbox">("meetings")
+  const [view, setView] = useState<"meetings" | "records">("meetings")
   const [liveMeetingId, setLiveMeetingId] = useState<number | null>(null)
   const [backendError, setBackendError] = useState("")
   const loadApiMeetings = () =>
@@ -3627,7 +3689,6 @@ function Dashboard() {
             [
               ["meetings", "Meetings"],
               ["records", "Records"],
-              ["outbox", "Outbox"],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -3677,36 +3738,8 @@ function Dashboard() {
           />
         ) : view === "records" ? (
           <RecordsPage />
-        ) : view === "outbox" ? (
-          <OutboxPage />
         ) : (
           <div className="relative mx-auto mt-5 flex w-full max-w-[1240px] flex-1 flex-col gap-6 px-5 pb-8 md:px-8 xl:px-10">
-            {sameDay(selectedDate, today) && (
-              <>
-                <div
-                  className="pointer-events-none absolute left-0 top-[42%] hidden -translate-y-1/2 min-[1680px]:block"
-                  aria-hidden="true"
-                >
-                  <div className="h-40 w-32 rounded-full bg-[radial-gradient(circle,#eef5ff_0%,transparent_68%)]" />
-                  <img
-                    className="absolute left-0 top-1/2 w-32 -translate-y-1/2 object-contain"
-                    src="/assets/amber-assistant.svg"
-                    alt=""
-                  />
-                </div>
-                <div
-                  className="pointer-events-none absolute bottom-4 right-0 hidden min-[1680px]:block"
-                  aria-hidden="true"
-                >
-                  <div className="absolute bottom-0 right-0 h-44 w-32 rounded-full bg-[radial-gradient(circle_at_bottom,#eef5ff_0%,transparent_70%)]" />
-                  <img
-                    className="relative w-28 object-contain"
-                    src="/assets/meeting-checklist.svg"
-                    alt=""
-                  />
-                </div>
-              </>
-            )}
             {selectedMeetings.length === 0 ? (
               sameDay(selectedDate, today) ? (
                 <>
@@ -3720,10 +3753,18 @@ function Dashboard() {
                           No meetings scheduled today
                         </h2>
                         <p className="mt-1 text-sm text-[#758199]">
-                          Join an unscheduled Meet below or plan one for later.
+                          Send Amber to a Meet now or plan one for later.
                         </p>
                       </div>
                     </div>
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                    <button
+                      className="flex shrink-0 items-center justify-center gap-2 rounded-full bg-[#3479f5] px-5 py-2.5 text-sm font-bold text-white shadow-[0_6px_16px_rgba(52,121,245,0.2)] hover:bg-[#2068e7]"
+                      type="button"
+                      onClick={() => setJoinModalOpen(true)}
+                    >
+                      <Video className="h-4 w-4" /> Amber join meet
+                    </button>
                     <button
                       className="flex shrink-0 items-center justify-center gap-2 rounded-full border border-[#bfcde3] bg-white px-5 py-2.5 text-sm font-bold text-[#3479f5] hover:border-[#3479f5]"
                       type="button"
@@ -3734,16 +3775,7 @@ function Dashboard() {
                     >
                       <CalendarDays className="h-4 w-4" /> Schedule meet
                     </button>
-                  </div>
-                  <div className="w-full">
-                    <QuickJoinCard
-                      workspace={selectedWorkspace}
-                      category={selectedCategory}
-                      onDispatched={(id) => {
-                        void loadApiMeetings()
-                        setLiveMeetingId(id)
-                      }}
-                    />
+                    </div>
                   </div>
                 </>
               ) : (
@@ -3782,6 +3814,16 @@ function Dashboard() {
                       </h2>
                     </div>
                     {!isPastDate && (
+                      <div className="flex gap-2">
+                      {sameDay(selectedDate, today) && (
+                        <button
+                          className="flex items-center gap-2 rounded-full bg-[#3479f5] px-5 py-2.5 text-sm font-bold text-white shadow-[0_6px_16px_rgba(52,121,245,0.2)] transition hover:bg-[#2068e7]"
+                          type="button"
+                          onClick={() => setJoinModalOpen(true)}
+                        >
+                          <Video className="h-4 w-4" /> <span className="hidden sm:inline">Amber join meet</span><span className="sm:hidden">Join</span>
+                        </button>
+                      )}
                       <button
                         className="hidden items-center gap-2 rounded-full border border-[#bfd0e7] bg-[#f7faff] px-5 py-2.5 text-sm font-bold text-[#3479f5] transition hover:border-[#3479f5] hover:bg-[#eef4ff] sm:flex"
                         type="button"
@@ -3792,6 +3834,7 @@ function Dashboard() {
                       >
                         <CalendarDays className="h-4 w-4" /> Schedule meet
                       </button>
+                      </div>
                     )}
                   </div>
                   <div className="space-y-3">
@@ -3915,20 +3958,22 @@ function Dashboard() {
                     })}
                   </div>
                 </div>
-                {sameDay(selectedDate, today) && (
-                  <div className="w-full">
-                    <QuickJoinCard
-                      workspace={selectedWorkspace}
-                      category={selectedCategory}
-                      onDispatched={(id) => {
-                        void loadApiMeetings()
-                        setLiveMeetingId(id)
-                      }}
-                    />
-                  </div>
-                )}
               </>
             )}
+          </div>
+        )}
+        {liveMeetingId === null && view === "meetings" && sameDay(selectedDate, today) && (
+          // Pinned to the bottom corners of the visible area (sticky, so they stay put while the list scrolls),
+          // in the margins either side of the 1240px column; only shown once the window leaves room for them.
+          <div className="pointer-events-none sticky bottom-0 hidden h-0 min-[1760px]:block" aria-hidden="true">
+            <div className="absolute bottom-0 left-0">
+              <div className="absolute bottom-0 left-0 h-44 w-36 rounded-full bg-[radial-gradient(circle_at_bottom,#eef5ff_0%,transparent_70%)]" />
+              <img className="relative w-32 object-contain" src="/assets/amber-assistant.svg" alt="" />
+            </div>
+            <div className="absolute bottom-0 right-0">
+              <div className="absolute bottom-0 right-0 h-44 w-32 rounded-full bg-[radial-gradient(circle_at_bottom,#eef5ff_0%,transparent_70%)]" />
+              <img className="relative w-28 object-contain" src="/assets/meeting-checklist.svg" alt="" />
+            </div>
           </div>
         )}
       </section>
@@ -4007,6 +4052,19 @@ function Dashboard() {
             onSave={saveAgenda}
           />
         )}
+      {joinModalOpen && (
+        <QuickJoinCard
+          workspaces={workspaces}
+          initialWorkspaceId={selectedWorkspaceId}
+          initialCategoryId={selectedCategoryId}
+          onClose={() => setJoinModalOpen(false)}
+          onDispatched={(id) => {
+            setJoinModalOpen(false)
+            void loadApiMeetings()
+            setLiveMeetingId(id)
+          }}
+        />
+      )}
       {scheduleModalOpen && (
         <ScheduleMeetModal
           workspaces={workspaces}

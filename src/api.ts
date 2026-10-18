@@ -30,7 +30,15 @@ export type ApiTask = {
   reminded_at: string | null
 }
 
-export type ApiRecordNote = { id: number; record_id: string; meeting_id: number; note: string; confidence: number; ts: string }
+export type ApiRecordNote = {
+  id: number
+  record_id: string
+  meeting_id: number
+  note: string
+  confidence: number
+  ts: string
+  edited_at: string | null
+}
 
 export type Mom = {
   executive_summary: string
@@ -117,7 +125,16 @@ export const api = {
     call<{ paused: boolean }>(`/meetings/${id}/recording/${action}`, { method: "POST" }),
   resendRecap: (id: number) => call<ApiMeetingDetail>(`/meetings/${id}/recap`, { method: "POST" }),
   records: () => call<ApiRecord[]>("/records"),
-  outbox: () => call<OutboxItem[]>("/outbox"),
+  editRecord: (recordId: string, fields: Partial<Pick<ApiRecord, "name" | "aliases" | "status" | "owner" | "details">>) =>
+    call<ApiRecord>(`/records/${encodeURIComponent(recordId)}`, { method: "PATCH", body: JSON.stringify(fields) }),
+  editNote: (recordId: string, noteId: number, note: string) =>
+    call<ApiRecordNote>(`/records/${encodeURIComponent(recordId)}/notes/${noteId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ note }),
+    }),
+  deleteNote: (recordId: string, noteId: number) =>
+    call<{ ok: boolean }>(`/records/${encodeURIComponent(recordId)}/notes/${noteId}`, { method: "DELETE" }),
+  outbox: (meetingId?: number) => call<OutboxItem[]>(meetingId ? `/outbox?meeting_id=${meetingId}` : "/outbox"),
   outboxItem: (id: number) => call<OutboxItem>(`/outbox/${id}`),
 }
 

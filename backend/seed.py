@@ -31,7 +31,8 @@ RECORDS = [
 def seed():
     db.init()
     with db.db() as c:
-        c.executemany("INSERT OR REPLACE INTO records VALUES (?,?,?,?,?,?,?)", RECORDS)
+        # IGNORE, not REPLACE: runs on every start, and must not undo operator edits or statuses Amber set.
+        c.executemany("INSERT OR IGNORE INTO records VALUES (?,?,?,?,?,?,?)", RECORDS)
 
 
 if __name__ == "__main__":
