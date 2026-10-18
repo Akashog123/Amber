@@ -571,6 +571,9 @@ c.post("/webhooks/recall?token=t", json=replay.payload(d["bot_id"], 0, "chat", "
 time.sleep(0.3)
 assert db.row("SELECT note FROM record_notes WHERE record_id='PO-1046' ORDER BY id DESC LIMIT 1")["note"] == "हिंदी नोट"
 assert c.get("/media/amber").status_code == 200 and "amberStats" in c.get("/media/amber").text
+# Her avatar is inlined: the bot's page must not depend on fetching an image through the tunnel.
+assert 'class="face" alt="" src="data:image/png;base64,' in c.get("/media/amber").text
+assert "if (msg.on && !document.body.classList.contains(\"hand-up\")) chime()" in c.get("/media/amber").text
 assert c.get("/media/amber", headers={"cf-connecting-ip": "1.2.3.4"}).status_code == 200  # Recall loads it via the tunnel
 os.environ["ELEVENLABS_API_KEY"] = ""
 time.sleep(0.3)
